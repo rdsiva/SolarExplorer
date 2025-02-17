@@ -17,10 +17,6 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
-args = "Energy Price Bot"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
 args = "Telegram Price Monitor"
 
 [[workflows.workflow.tasks]]
@@ -33,25 +29,11 @@ args = "Test Agents"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
-args = "Telegram Bot Service"
+args = "Price Data Scheduler"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
-args = "Telegram Bot"
-
-[[workflows.workflow]]
-name = "Energy Price Bot"
-author = "agent"
-
-[workflows.workflow.metadata]
-agentRequireRestartOnSave = false
-
-[[workflows.workflow.tasks]]
-task = "packager.installForAll"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "python bot.py"
+args = "Simple ComEd Bot"
 
 [[workflows.workflow]]
 name = "Telegram Price Monitor"
@@ -97,7 +79,7 @@ task = "shell.exec"
 args = "python test_agents.py"
 
 [[workflows.workflow]]
-name = "Telegram Bot Service"
+name = "Price Data Scheduler"
 author = "agent"
 
 [workflows.workflow.metadata]
@@ -108,11 +90,10 @@ task = "packager.installForAll"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "python main.py"
-waitForPort = 5000
+args = "python price_scheduler.py"
 
 [[workflows.workflow]]
-name = "Telegram Bot"
+name = "Simple ComEd Bot"
 author = "agent"
 
 [workflows.workflow.metadata]
@@ -123,7 +104,7 @@ task = "packager.installForAll"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "python minimal_bot.py"
+args = "python simple_approach/bot.py"
 
 [[ports]]
 localPort = 5000
