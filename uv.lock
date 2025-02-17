@@ -127,6 +127,20 @@ wheels = [
 ]
 
 [[package]]
+name = "apscheduler"
+version = "3.10.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pytz" },
+    { name = "six" },
+    { name = "tzlocal" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/5e/34/5dcb368cf89f93132d9a31bd3747962a9dc874480e54333b0c09fa7d56ac/APScheduler-3.10.4.tar.gz", hash = "sha256:e6df071b27d9be898e486bc7940a7be50b4af2e9da7c08f0744a96d4bd4cef4a", size = 100832 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/13/b5/7af0cb920a476dccd612fbc9a21a3745fb29b1fcd74636078db8f7ba294c/APScheduler-3.10.4-py3-none-any.whl", hash = "sha256:fb91e8a768632a4756a585f79ec834e0e27aad5860bac7eaa523d9ccefd87661", size = 59303 },
+]
+
+[[package]]
 name = "attrs"
 version = "25.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1053,6 +1067,12 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/6f/8e/4e4ed06986557fce0c41c3dfc60c5495b1095cf8a552bdc4c56e96aefdac/python_telegram_bot-20.8-py3-none-any.whl", hash = "sha256:a98ddf2f237d6584b03a2f8b20553e1b5e02c8d3a1ea8e17fd06cc955af78c14", size = 604866 },
 ]
 
+[package.optional-dependencies]
+job-queue = [
+    { name = "apscheduler" },
+    { name = "pytz" },
+]
+
 [[package]]
 name = "pytz"
 version = "2025.1"
@@ -1148,7 +1168,7 @@ dependencies = [
     { name = "pandas" },
     { name = "psycopg2-binary" },
     { name = "python-dotenv" },
-    { name = "python-telegram-bot" },
+    { name = "python-telegram-bot", extra = ["job-queue"] },
     { name = "requests" },
     { name = "scikit-learn" },
     { name = "scipy" },
@@ -1176,7 +1196,7 @@ requires-dist = [
     { name = "pandas", specifier = ">=2.2.3" },
     { name = "psycopg2-binary", specifier = ">=2.9.10" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
-    { name = "python-telegram-bot", specifier = ">=20.0" },
+    { name = "python-telegram-bot", extras = ["job-queue"], specifier = ">=20.0" },
     { name = "requests", specifier = ">=2.31.0" },
     { name = "scikit-learn", specifier = ">=1.6.1" },
     { name = "scipy", specifier = ">=1.15.2" },

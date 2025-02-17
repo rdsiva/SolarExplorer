@@ -1,6 +1,9 @@
 from .base_module import BaseModule
 from .module_manager import ModuleManager
 from .errors import ModuleError
+from .price_monitor_module import PriceMonitorModule
+from .pattern_analysis_module import PatternAnalysisModule
+from .ml_prediction_module import MLPredictionModule
 
 # Lazy imports to avoid circular dependencies
 def get_price_monitor_module():
@@ -26,5 +29,8 @@ __all__ = [
     'get_dashboard_module',
     'get_price_monitor_module',
     'get_pattern_analysis_module',
-    'get_ml_prediction_module'
+    'get_ml_prediction_module',
+    'PriceMonitorModule',
+    'PatternAnalysisModule',
+    'MLPredictionModule'
 ]
