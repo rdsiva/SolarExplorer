@@ -22,7 +22,7 @@ try:
     if not os.environ.get("DATABASE_URL"):
         logger.error("DATABASE_URL environment variable is not set")
 
-    app.secret_key = os.environ.get("SESSION_SECRET", "default-dev-secret")
+    app.secret_key = os.environ.get("SESSION_SECRET")
 
     # Configure the database
     logger.info("Configuring database connection...")
@@ -41,17 +41,17 @@ try:
 
     app.jinja_env.filters['strftime'] = format_datetime
 
-    # Initialize database first
+    # Initialize database
     logger.info("Initializing database...")
     init_db(app)
 
+    # Initialize agent manager after database is ready
     with app.app_context():
-        # Initialize the agent manager (this will initialize all agents)
         from agents.agent_manager import AgentManager
         logger.info("Initializing AgentManager...")
         agent_manager = AgentManager()
 
-        # Import routes after all initialization is complete
+        # Import routes last, after all initialization is complete
         import routes
 
         logger.info("Flask application initialization completed")
