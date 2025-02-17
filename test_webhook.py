@@ -12,7 +12,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Your webhook URL
-WEBHOOK_URL = "https://comed-price-telegram-notification.onrender.com/telegram/webhook"
+WEBHOOK_URL = "https://1a8446b3-198e-4458-9e5f-60fa0a94ff1f-00-1nh6gkpmzmrcg.janeway.replit.dev/telegram/webhook"
 
 async def test_webhook():
     """Test the webhook configuration"""

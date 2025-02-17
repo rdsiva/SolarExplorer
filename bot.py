@@ -23,8 +23,8 @@ app = Flask(__name__)
 CORS(app)
 app.config['SECRET_KEY'] = os.environ.get('SESSION_SECRET', 'dev-secret-key')
 
-# Set webhook URL
-WEBHOOK_URL = "https://comed-price-telegram-notification.onrender.com/telegram/webhook"
+# Set webhook URL using Replit domain
+WEBHOOK_URL = "https://1a8446b3-198e-4458-9e5f-60fa0a94ff1f-00-1nh6gkpmzmrcg.janeway.replit.dev/telegram/webhook"
 logger.info(f"Using webhook URL: {WEBHOOK_URL}")
 
 # Initialize bot at module level
