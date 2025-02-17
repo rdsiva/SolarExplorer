@@ -104,7 +104,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Check current prices with ML predictions"""
+    """Check current prices with ML predictions including weather impact"""
     try:
         chat_id = update.effective_chat.id
         await update.message.reply_text("🔍 Checking current prices with ML analysis...")
@@ -118,21 +118,13 @@ async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
             prefs = UserPreferences.get_user_preferences(str(chat_id))
             threshold = prefs.price_threshold if prefs else 3.0
 
-        # Generate ML-based prediction
+        # Generate ML-based prediction with weather data
         current_price = float(hourly_data.get('price', 0))
-        predicted_price, confidence = calculate_prediction(current_price, hourly_data)
-
-        # Get prediction range from ML model
         prediction = price_predictor.predict(current_price)
+        predicted_price = prediction['predicted_price']
+        confidence = prediction['confidence']
         prediction_range = prediction['range']
-
-        # Enhanced prediction data with ML insights
-        prediction_data = {
-            'short_term_prediction': predicted_price,
-            'confidence': confidence,
-            'trend': prediction['trend'],
-            'next_hour_range': prediction_range
-        }
+        weather_impact = prediction.get('weather_impact')
 
         # Store prediction in database
         price_record = None
@@ -142,7 +134,7 @@ async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     hourly_price=current_price,
                     predicted_price=predicted_price,
                     prediction_confidence=confidence,
-                    provider="ComEd"  # Ensure provider is set for ML training
+                    provider="ComEd"
                 )
                 db.session.add(price_record)
                 db.session.commit()
@@ -151,7 +143,7 @@ async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.error(f"Database error while storing prediction: {str(db_error)}")
                 db.session.rollback()
 
-        # Format message with enhanced ML predictions
+        # Format message with enhanced ML predictions and weather impact
         message = "📊 Current Energy Prices:\n\n"
         message += f"5-min price: {five_min_data.get('price', 'N/A')}¢\n"
         message += f"Hourly price: {hourly_data.get('price', 'N/A')}¢\n"
@@ -168,11 +160,22 @@ async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         message += f"Trend: {prediction['trend'].capitalize()}\n\n"
 
-        # Add ML prediction section
+        # Add ML prediction section with weather impact
         message += "🤖 ML Price Prediction:\n"
         message += f"Next hour: {predicted_price:.1f}¢\n"
         message += f"Range: {prediction_range['low']:.1f}¢ - {prediction_range['high']:.1f}¢\n"
         message += f"Confidence: {confidence}%\n"
+
+        # Add weather impact section if available
+        if weather_impact is not None:
+            message += "\n🌡️ Weather Impact Analysis:\n"
+            impact_percent = int(weather_impact * 100)
+            if impact_percent > 10:
+                message += f"⚠️ Weather conditions may increase prices by {impact_percent}%\n"
+            elif impact_percent > 0:
+                message += f"ℹ️ Mild weather impact: +{impact_percent}% on prices\n"
+            else:
+                message += "✅ Weather conditions are favorable for energy prices\n"
 
         # Add timestamp
         cst_time = datetime.now(ZoneInfo("America/Chicago"))
@@ -244,6 +247,7 @@ def calculate_prediction(current_price: float, hourly_data: dict) -> tuple[float
         logger.error(f"Error calculating ML prediction: {str(e)}")
         # Fallback to simple prediction
         return round(current_price * 1.05, 1), 60
+
 
 
 def main():
