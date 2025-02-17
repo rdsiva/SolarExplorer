@@ -3,6 +3,11 @@ from flask import Flask, render_template, jsonify, request
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.orm import DeclarativeBase
 from modules import ModuleManager, PriceMonitorModule, PatternAnalysisModule, MLPredictionModule
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 class Base(DeclarativeBase):
     pass
@@ -10,10 +15,6 @@ class Base(DeclarativeBase):
 db = SQLAlchemy(model_class=Base)
 app = Flask(__name__)
 app.secret_key = os.environ.get("SESSION_SECRET")
-
-# Set the server name for external URLs
-app.config["SERVER_NAME"] = "1a8446b3-198e-4458-9e5f-60fa0a94ff1f-00-1nh6gkpmzmrcg.janeway.replit.dev"
-app.config["PREFERRED_URL_SCHEME"] = "https"
 
 # Configure the database
 app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get("DATABASE_URL")
@@ -38,33 +39,49 @@ module_manager.enable_module("price_monitor")
 
 db.init_app(app)
 
-@app.route('/')
-def index():
-    return render_template('index.html')
-
-@app.route('/modules')
-def module_manager_view():
-    modules = module_manager.get_all_modules()
-    return render_template('module_manager.html', modules=modules)
+@app.route('/module-management')
+def module_management():
+    """View for module management interface"""
+    try:
+        modules = module_manager.get_all_modules()
+        return render_template('module_manager.html', modules=modules)
+    except Exception as e:
+        logger.error(f"Error in module management view: {str(e)}")
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/api/modules/<module_name>', methods=['POST'])
 def toggle_module(module_name):
-    action = request.json.get('action')
-    if module_name == 'price_monitor':
+    """API endpoint to toggle module state"""
+    try:
+        if module_name == 'price_monitor':
+            return jsonify({
+                'success': False,
+                'message': 'Price monitor module cannot be disabled as it is required.'
+            }), 400
+
+        data = request.get_json()
+        if not data or 'action' not in data:
+            return jsonify({
+                'success': False,
+                'message': 'Missing action parameter'
+            }), 400
+
+        action = data['action']
+        if action not in ['enable', 'disable']:
+            return jsonify({
+                'success': False,
+                'message': 'Invalid action. Must be either "enable" or "disable"'
+            }), 400
+
+        success = module_manager.enable_module(module_name) if action == 'enable' else module_manager.disable_module(module_name)
+
         return jsonify({
-            'success': False,
-            'message': 'Price monitor module cannot be disabled as it is required.'
-        }), 400
-
-    if action == 'enable':
-        success = module_manager.enable_module(module_name)
-    else:
-        success = module_manager.disable_module(module_name)
-
-    return jsonify({
-        'success': success,
-        'message': f"Module {module_name} {'enabled' if action == 'enable' else 'disabled'} successfully" if success else "Operation failed"
-    })
+            'success': success,
+            'message': f"Module {module_name} {'enabled' if action == 'enable' else 'disabled'} successfully" if success else "Operation failed"
+        })
+    except Exception as e:
+        logger.error(f"Error toggling module {module_name}: {str(e)}")
+        return jsonify({'success': False, 'message': str(e)}), 500
 
 with app.app_context():
     import models

@@ -8,8 +8,7 @@ from modules import ModuleManager, PriceMonitorModule, PatternAnalysisModule, ML
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from app import app
-from flask import render_template #Import render_template
-
+from flask import render_template, request, jsonify #Import render_template, request, jsonify
 
 # Configure logging
 logging.basicConfig(
@@ -91,8 +90,7 @@ class EnergyPriceBot:
                 f"  • /check_price - Check current energy prices\n"
                 f"  • /status - View monitoring status\n\n"
                 f"2. Module Management:\n"
-                f"  • /modules - List all available modules\n"
-                f"  • 🌐 Manage modules at: https://{app.config['SERVER_NAME']}/modules\n\n"
+                f"  • /modules - List all available modules\n\n"
                 f"3. Pattern Analysis (Optional Module):\n"
                 f"  • Provides volatility and trend analysis\n\n"
                 f"4. ML Predictions (Optional Module):\n"
@@ -139,7 +137,7 @@ class EnergyPriceBot:
                     optional_count += 1
 
             message += "\n🌐 Manage modules at:\n"
-            message += f"https://{app.config['SERVER_NAME']}/modules\n\n"
+            message += f"https://{app.config['SERVER_NAME']}/module-management\n\n" #Updated URL
             message += "Note: The price monitor module is required and cannot be disabled."
 
             await update.message.reply_text(message)
@@ -318,11 +316,32 @@ class EnergyPriceBot:
             return False
 
 
-@app.route('/modules', methods=['GET'])
-def module_manager_view():
+@app.route('/module-management', methods=['GET'])
+def module_management_view():
+    """View for module management web interface"""
     modules = bot.module_manager.get_all_modules() # Access module_manager through bot instance
     return render_template('module_manager.html', modules=modules)
 
+@app.route('/api/modules/<module_name>', methods=['POST'])
+def toggle_module(module_name):
+    """API endpoint to toggle module state"""
+    try:
+        data = request.get_json()
+        action = data.get('action')
+
+        if action == 'enable':
+            success = bot.module_manager.enable_module(module_name)
+        elif action == 'disable':
+            success = bot.module_manager.disable_module(module_name)
+        else:
+            return jsonify({'success': False, 'message': 'Invalid action'}), 400
+
+        return jsonify({
+            'success': success,
+            'message': f'Module {module_name} {"enabled" if action == "enable" else "disabled"} successfully'
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
 
 if __name__ == '__main__':
     bot = EnergyPriceBot()

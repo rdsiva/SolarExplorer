@@ -8,7 +8,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 @app.route('/')
-def index():
+def root():
     """Root route handler"""
     return redirect(url_for('analytics_dashboard', chat_id="-4684354099"))
 

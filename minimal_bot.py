@@ -59,7 +59,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/tesla_status - Check Tesla vehicle status\n"
         "/tesla_update - Update Tesla preferences\n"
         "/tesla_disable - Disable Tesla integration\n"
-        "/help - Show this help message"
+        "/help - Show this help message\n"
+        "/modules - List available modules"
     )
     await update.message.reply_text(welcome_message)
 
@@ -444,6 +445,44 @@ async def tesla_callback_url(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "❌ Error retrieving callback URL. Please try again later."
         )
 
+async def list_modules(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """List all available modules and their status"""
+    try:
+        modules = bot.module_manager.get_all_modules()
+        message = "📊 Available Modules:\n\n"
+
+        # First list required price monitor module
+        for module in modules:
+            if module["name"] == "price_monitor":
+                message += (
+                    f"1. {module['name'].replace('_', ' ').title()} 🔒\n"
+                    f"   • Status: ✅ Always Enabled (Required)\n"
+                    f"   • Description: {module['description']}\n\n"
+                )
+                break
+
+        # Then list optional modules
+        optional_count = 2
+        for module in modules:
+            if module["name"] != "price_monitor":
+                status = "✅ Enabled" if module["enabled"] else "❌ Disabled"
+                message += (
+                    f"{optional_count}. {module['name'].replace('_', ' ').title()} (Optional)\n"
+                    f"   • Status: {status}\n"
+                    f"   • Description: {module['description']}\n\n"
+                )
+                optional_count += 1
+
+        # Add web interface link
+        repl_slug = os.environ.get("REPL_SLUG", "")
+        repl_owner = os.environ.get("REPL_OWNER", "")
+        message += f"\n🌐 Manage modules at:\nhttps://{repl_slug}.{repl_owner}.repl.co/module-management"
+
+        await update.message.reply_text(message)
+    except Exception as e:
+        logger.error(f"Error listing modules: {str(e)}")
+        await update.message.reply_text("Sorry, there was an error listing the modules.")
+
 def main():
     """Start the bot."""
     try:
@@ -474,6 +513,7 @@ def main():
         application.add_handler(CommandHandler("tesla_status", tesla_status))
         application.add_handler(CommandHandler("tesla_disable", tesla_disable))
         application.add_handler(CommandHandler("tesla_url", tesla_callback_url))
+        application.add_handler(CommandHandler("modules", list_modules)) # Added module handler
         application.add_handler(threshold_handler)
         application.add_handler(tesla_setup_handler)
         application.add_handler(CallbackQueryHandler(handle_prediction_feedback))
