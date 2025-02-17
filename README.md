@@ -1,24 +1,8 @@
-# Energy Price Monitor Bot
-A Telegram bot for monitoring real-time energy prices with ML-powered predictions and alerts.
+TELEGRAM_BOT_TOKEN=your_bot_token    # From Telegram BotFather
+DATABASE_URL=postgresql://...        # PostgreSQL connection string
+SESSION_SECRET=your_secret_key       # Flask session secret
+```
 
-## Table of Contents
-- [Dependencies](#dependencies)
-- [Database Setup](#database-setup)
-  - [Schema](#schema)
-- [Getting Started](#getting-started)
-- [Running the Application](#running-the-application)
-  - [Main Components](#main-components)
-- [Module System](#module-system)
-  - [Active Modules](#active-modules)
-  - [Creating New Modules](#creating-new-modules)
-- [Notification System](#notification-system)
-  - [Price Alerts](#price-alerts)
-  - [Alert Configuration](#alert-configuration)
-- [Local Development Setup](#local-development-setup)
-- [Project Structure](#project-structure)
-
-### Dependencies
-```bash
 # Core dependencies
 flask-sqlalchemy==3.1.1      # Database ORM
 python-telegram-bot==20.7    # Telegram Bot API
@@ -34,7 +18,6 @@ psycopg2-binary==2.9.9      # PostgreSQL adapter
 beautifulsoup4==4.12.2   # HTML parsing
 trafilatura==1.6.1       # Web scraping
 
-```
 
 ## Database Setup
 
@@ -261,3 +244,163 @@ project_root/
 └── templates/            # Flask templates
     ├── base.html
     └── dashboard.html
+```
+
+## Scalability and Cloud Deployment
+
+### Module Independence
+Each module in the system is designed to run independently, allowing for flexible scaling:
+
+1. **Price Monitor Module**
+   - Can run as a standalone service
+   - Scales based on monitoring load
+   - Configuration via environment variables:
+   ```bash
+   PRICE_MONITOR_SCALING=auto
+   PRICE_MONITOR_MIN_INSTANCES=1
+   PRICE_MONITOR_MAX_INSTANCES=5
+   ```
+
+2. **Pattern Analysis Module**
+   - Independent data processing
+   - Scales based on analysis complexity
+   - Configurable through:
+   ```bash
+   PATTERN_ANALYSIS_WORKERS=3
+   PATTERN_ANALYSIS_BATCH_SIZE=100
+   ```
+
+3. **ML Prediction Module**
+   - Separate ML processing service
+   - GPU support for training
+   - Scaling configuration:
+   ```bash
+   ML_PREDICTION_WORKERS=2
+   ML_PREDICTION_BATCH_SIZE=50
+   ```
+
+### Cloud Deployment with Kubernetes
+
+The application is designed to be cloud-agnostic and can be deployed on any Kubernetes cluster:
+
+#### Component Separation
+```yaml
+# Example Kubernetes structure
+services/
+├── telegram-bot/         # Telegram bot service
+│   ├── Dockerfile
+│   └── k8s/
+│       ├── deployment.yaml
+│       └── service.yaml
+├── price-monitor/       # Price monitoring service
+│   ├── Dockerfile
+│   └── k8s/
+│       ├── deployment.yaml
+│       └── service.yaml
+├── flask-server/        # Web interface
+│   ├── Dockerfile
+│   └── k8s/
+│       ├── deployment.yaml
+│       └── service.yaml
+└── shared/             # Shared configurations
+    ├── configmap.yaml
+    └── secrets.yaml
+```
+
+#### Scaling Strategies
+1. **Horizontal Pod Autoscaling (HPA)**
+   - Automatic scaling based on CPU/memory usage
+   - Custom metrics for specific modules
+   ```yaml
+   apiVersion: autoscaling/v2
+   kind: HorizontalPodAutoscaler
+   metadata:
+     name: price-monitor-hpa
+   spec:
+     scaleTargetRef:
+       apiVersion: apps/v1
+       kind: Deployment
+       name: price-monitor
+     minReplicas: 1
+     maxReplicas: 5
+     metrics:
+     - type: Resource
+       resource:
+         name: cpu
+         target:
+           type: Utilization
+           averageUtilization: 80
+   ```
+
+2. **Vertical Pod Autoscaling (VPA)**
+   - Automatic resource adjustment
+   - Optimal resource utilization
+   ```yaml
+   apiVersion: autoscaling.k8s.io/v1
+   kind: VerticalPodAutoscaler
+   metadata:
+     name: ml-prediction-vpa
+   spec:
+     targetRef:
+       apiVersion: apps/v1
+       kind: Deployment
+       name: ml-prediction
+     updatePolicy:
+       updateMode: Auto
+   ```
+
+### Inter-Module Communication
+- Uses message queues for asynchronous communication
+- Supports both RabbitMQ and Redis pub/sub
+- Configuration example:
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: queue-config
+data:
+  QUEUE_TYPE: "rabbitmq"
+  QUEUE_HOST: "rabbitmq-service"
+  QUEUE_PORT: "5672"
+```
+
+### State Management
+- PostgreSQL deployed as StatefulSet
+- Persistent volume claims for data storage
+- Example configuration:
+```yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgresql
+spec:
+  serviceName: postgresql
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgresql
+  template:
+    metadata:
+      labels:
+        app: postgresql
+    spec:
+      containers:
+      - name: postgresql
+        image: postgres:13
+        env:
+        - name: POSTGRES_DB
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: DB_NAME
+        volumeMounts:
+        - name: postgresql-data
+          mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+  - metadata:
+      name: postgresql-data
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: 10Gi
