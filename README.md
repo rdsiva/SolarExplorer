@@ -1,7 +1,21 @@
-TELEGRAM_BOT_TOKEN=your_bot_token    # From Telegram BotFather
-DATABASE_URL=postgresql://...        # PostgreSQL connection string
-SESSION_SECRET=your_secret_key       # Flask session secret
-```
+# Energy Price Monitor Bot
+A Telegram bot for monitoring real-time energy prices with ML-powered predictions and alerts.
+
+## Table of Contents
+- [Dependencies](#dependencies)
+- [Database Setup](#database-setup)
+  - [Schema](#schema)
+- [Getting Started](#getting-started)
+- [Running the Application](#running-the-application)
+  - [Main Components](#main-components)
+- [Module System](#module-system)
+  - [Active Modules](#active-modules)
+  - [Creating New Modules](#creating-new-modules)
+- [Notification System](#notification-system)
+  - [Price Alerts](#price-alerts)
+  - [Alert Configuration](#alert-configuration)
+- [Local Development Setup](#local-development-setup)
+- [Project Structure](#project-structure)
 
 ### Dependencies
 ```bash
