@@ -26,4 +26,5 @@ dependencies = [
     "scikit-learn>=1.6.1",
     "scipy>=1.15.2",
     "oauthlib>=3.2.2",
+    "slack-sdk>=3.34.0",
 ]

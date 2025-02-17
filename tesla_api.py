@@ -45,25 +45,19 @@ class TeslaAPI:
             self.state = str(uuid.uuid4())
             logger.info(f"Generated OAuth state: {self.state}")
 
-            # Get the Replit domain for the callback URL
+            # Generate base callback URL using public Replit domain
             repl_owner = os.environ.get("REPL_OWNER", "")
             repl_slug = os.environ.get("REPL_SLUG", "")
-            logger.info(f"Replit domain components - owner: {repl_owner}, slug: {repl_slug}")
-
-            # Generate base callback URL without chat_id parameter
             base_callback_url = f"https://{repl_slug}.{repl_owner}.repl.co/tesla/oauth/callback"
-            # Full callback URL with chat_id (for actual use)
-            callback_url = f"{base_callback_url}?chat_id={chat_id}"
-
-            logger.info(f"Base callback URL (add this to Tesla app): {base_callback_url}")
-            logger.info(f"Full callback URL that will be used: {callback_url}")
+            logger.info(f"Using public callback URL: {base_callback_url}")
 
             params = {
                 'client_id': self.client_id,
-                'redirect_uri': callback_url,
+                'redirect_uri': base_callback_url,
                 'response_type': 'code',
                 'scope': 'openid email offline_access vehicle_device_data vehicle_cmds',
-                'state': self.state
+                'state': self.state,
+                'chat_id': chat_id  # Add chat_id as a separate parameter
             }
 
             auth_url = f"{self.oauth_url}/authorize"
@@ -79,7 +73,7 @@ class TeslaAPI:
     def exchange_code_for_token(self, code: str, state: str) -> dict:
         """Exchange authorization code for access token"""
         token_url = f"{self.oauth_url}/token"
-        
+
         # Get the Replit domain for the callback URL
         repl_owner = os.environ.get("REPL_OWNER", "")
         repl_slug = os.environ.get("REPL_SLUG", "")
