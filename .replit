@@ -43,6 +43,10 @@ args = "Telegram Webhook Server"
 task = "workflow.run"
 args = "LivePrice Agent Test"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Price Alert Bot"
+
 [[workflows.workflow]]
 name = "Telegram Price Monitor"
 author = "agent"
@@ -141,6 +145,20 @@ task = "packager.installForAll"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "python -m unittest tests/test_live_price_agent.py -v"
+
+[[workflows.workflow]]
+name = "Price Alert Bot"
+author = "agent"
+
+[workflows.workflow.metadata]
+agentRequireRestartOnSave = false
+
+[[workflows.workflow.tasks]]
+task = "packager.installForAll"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "python price_alert_bot.py"
 
 [[ports]]
 localPort = 5000
