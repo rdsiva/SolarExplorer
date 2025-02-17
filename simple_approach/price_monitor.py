@@ -8,14 +8,14 @@ from typing import Optional
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,  # Changed to DEBUG for better troubleshooting
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
 @dataclass
 class PriceData:
-    """Simple data structure for price information"""
+    """Simple data class to hold price information"""
     price: float
     timestamp: datetime
     day_ahead_price: Optional[float] = None
@@ -32,14 +32,19 @@ class ComedPriceMonitor:
     def get_current_prices(self) -> PriceData:
         """Get current price data from ComEd"""
         try:
+            logger.debug("Fetching current price data...")
+
             # Get current price from pricing table
             current_price = self._get_current_price()
+            logger.debug(f"Current price: {current_price}")
 
             # Get hourly average
             hourly_average = self._get_hourly_average()
+            logger.debug(f"Hourly average: {hourly_average}")
 
             # Determine trend
             trend = self._calculate_trend(current_price, hourly_average)
+            logger.debug(f"Price trend: {trend}")
 
             return PriceData(
                 price=current_price,
@@ -54,6 +59,7 @@ class ComedPriceMonitor:
 
     def _get_current_price(self) -> float:
         """Get current price from pricing table"""
+        logger.debug("Fetching price from pricing table...")
         response = requests.get(self.pricing_table_url)
         response.raise_for_status()
 
@@ -64,19 +70,27 @@ class ComedPriceMonitor:
             raise ValueError("Price table not found")
 
         # Get first row after header
-        rows = price_table.find_all('tr')[1:2]
-        if not rows:
+        rows = price_table.find_all('tr')
+        if len(rows) < 2:  # Need at least header and one data row
             raise ValueError("No price data found")
 
-        cols = rows[0].find_all('td')
+        # Get the first data row (second row in table)
+        data_row = rows[1]
+        cols = data_row.find_all('td')
         if len(cols) < 2:
             raise ValueError("Invalid price table format")
 
-        return float(cols[1].text.strip().replace('¢', ''))
+        price_text = cols[1].text.strip().replace('¢', '')
+        try:
+            return float(price_text)
+        except ValueError as e:
+            logger.error(f"Error parsing price value '{price_text}': {str(e)}")
+            raise ValueError(f"Invalid price format: {price_text}")
 
     def _get_hourly_average(self) -> Optional[float]:
         """Get current hour average price"""
         try:
+            logger.debug("Fetching hourly average from API...")
             response = requests.get(f"{self.hourly_api_url}?type=currenthouraverage")
             response.raise_for_status()
             data = response.json()
@@ -85,7 +99,7 @@ class ComedPriceMonitor:
                 try:
                     return float(data[0]['price'])
                 except (KeyError, ValueError, TypeError) as e:
-                    logger.error(f"Error parsing price data: {e}")
+                    logger.error(f"Error parsing API response: {e}")
                     return None
 
             logger.warning("No price data in API response")
