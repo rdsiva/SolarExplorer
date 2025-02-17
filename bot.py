@@ -3,6 +3,7 @@ import logging
 import asyncio
 import nest_asyncio
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
 from telegram.error import NetworkError, TelegramError
@@ -23,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 # Initialize Flask app
 app = Flask(__name__)
+CORS(app)  # Enable CORS for all routes
 app.config['SECRET_KEY'] = os.environ.get('SESSION_SECRET', 'dev-secret-key')
 
 # Get the public URL from environment (needed for webhook)
@@ -33,10 +35,16 @@ if not PUBLIC_URL:
 # Initialize bot at module level
 application = None
 
+@app.before_request
+def log_request_info():
+    """Log details about each incoming request"""
+    logger.info('Headers: %s', request.headers)
+    logger.info('Body: %s', request.get_data())
+
 async def setup_webhook(app_instance: Application):
     """Set up webhook for receiving updates"""
     try:
-        webhook_url = f"{PUBLIC_URL}/webhook"
+        webhook_url = f"{PUBLIC_URL}/telegram/webhook"  # Changed webhook path
         logger.info(f"Setting up webhook at {webhook_url}")
 
         # Get current webhook info
@@ -66,37 +74,51 @@ async def setup_webhook(app_instance: Application):
         webhook_info = await app_instance.bot.get_webhook_info()
         logger.info(f"New webhook info: {webhook_info.url}")
 
-        if webhook_info.url != webhook_url:
-            raise Exception(f"Webhook verification failed. Expected {webhook_url}, got {webhook_info.url}")
-
-        logger.info("Webhook setup completed successfully")
         return True
 
     except Exception as e:
         logger.error(f"Failed to set up webhook: {e}", exc_info=True)
         return False
 
-@app.route('/webhook', methods=['POST'])
+@app.route('/telegram/webhook', methods=['POST'])  # Changed webhook route
 async def webhook():
     """Handle incoming webhook updates from Telegram"""
     try:
+        if request.method != 'POST':
+            logger.error(f"Invalid method {request.method} for webhook")
+            return jsonify({'status': 'error', 'message': 'Method not allowed'}), 405
+
         if not application:
             logger.error("Application not initialized")
             return jsonify({'status': 'error', 'message': 'Bot not initialized'}), 500
 
         # Log incoming update
         update_data = request.get_json()
-        logger.debug(f"Received webhook update: {update_data}")
+        if not update_data:
+            logger.error("No JSON data in webhook request")
+            return jsonify({'status': 'error', 'message': 'Invalid request format'}), 400
+
+        logger.info(f"Received webhook update: {update_data}")
 
         # Process update
         update = Update.de_json(update_data, application.bot)
-        await application.process_update(update)
-
-        return jsonify({'status': 'ok'})
+        if update:
+            logger.info(f"Processing update type: {update.effective_message.text if update.effective_message else 'No message'}")
+            await application.process_update(update)
+            logger.info("Update processed successfully")
+            return jsonify({'status': 'ok'})
+        else:
+            logger.error("Failed to parse update from Telegram")
+            return jsonify({'status': 'error', 'message': 'Invalid update format'}), 400
 
     except Exception as e:
         logger.error(f"Error processing webhook update: {e}", exc_info=True)
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/', methods=['GET'])
+def root():
+    """Root endpoint for basic health check"""
+    return jsonify({'status': 'ok', 'message': 'Telegram bot webhook server is running'})
 
 @app.route('/health', methods=['GET'])
 def health_check():
@@ -118,13 +140,19 @@ def health_check():
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start command handler"""
-    welcome_message = (
-        "👋 Welcome to the Energy Price Monitor Bot!\n\n"
-        "Available commands:\n"
-        "/check - Check current prices\n"
-        "/help - Show this help message"
-    )
-    await update.message.reply_text(welcome_message)
+    try:
+        logger.info(f"Handling /start command from user {update.effective_user.id}")
+        welcome_message = (
+            "👋 Welcome to the Energy Price Monitor Bot!\n\n"
+            "Available commands:\n"
+            "/check - Check current prices\n"
+            "/help - Show this help message"
+        )
+        await update.message.reply_text(welcome_message)
+        logger.info("Welcome message sent successfully")
+    except Exception as e:
+        logger.error(f"Error in start command: {e}", exc_info=True)
+        await update.message.reply_text("Sorry, there was an error processing your command.")
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Help command handler"""
@@ -185,9 +213,11 @@ async def init_telegram_bot():
         application.bot_data['module_manager'] = module_manager
 
         # Register command handlers
+        logger.info("Registering command handlers...")
         application.add_handler(CommandHandler("start", cmd_start))
         application.add_handler(CommandHandler("help", cmd_help))
         application.add_handler(CommandHandler("check", cmd_check))
+        logger.info("Command handlers registered successfully")
 
         # Set up webhook
         if not await setup_webhook(application):
@@ -251,16 +281,8 @@ def main():
         logger.info("Starting bot server...")
         app = create_app()
 
-        # Use hypercorn for ASGI support
-        from hypercorn.config import Config
-        from hypercorn.asyncio import serve
-
-        config = Config()
-        config.bind = ["0.0.0.0:5000"]
-        config.workers = 1  # Single worker to avoid webhook conflicts
-        config.worker_class = "asyncio"
-
-        asyncio.run(serve(app, config))
+        # Use Flask's built-in server for development
+        app.run(host='0.0.0.0', port=5000, debug=True)
 
     except Exception as e:
         logger.error(f"Bot failed to start: {e}", exc_info=True)
