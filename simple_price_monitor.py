@@ -71,11 +71,15 @@ class SimplePriceMonitor:
                 raise ValueError("Price table not found on page")
 
             # Get the most recent price (first row after header)
-            rows = price_table.find_all('tr')[1:2]  # Get just the first data row
-            if not rows:
+            rows = price_table.find_all('tr')
+            if not rows or len(rows) < 2:
                 raise ValueError("No price data found in table")
 
-            cols = rows[0].find_all('td')
+            first_data_row = rows[1]  # Skip header row
+            if not first_data_row or not hasattr(first_data_row, 'find_all'):
+                raise ValueError("Invalid table row format")
+
+            cols = first_data_row.find_all('td')
             if len(cols) < 2:
                 raise ValueError("Invalid price table format")
 

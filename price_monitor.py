@@ -28,41 +28,50 @@ class PriceMonitor:
             return None
 
     @staticmethod
-    def format_time(time_str, format_in='%I:%M %p', format_out='%Y-%m-%d %I:%M %p %Z'):
-        """Format time string with timezone and date"""
+    def _parse_price_time(time_str):
+        """Parse time string in various formats and return datetime object"""
         try:
-            cst_tz = ZoneInfo("America/Chicago")
-            current_time = datetime.now(cst_tz)
+            # Handle numeric types directly
+            if isinstance(time_str, (int, float)):
+                return float(time_str)
 
-            if not time_str:
-                return current_time.strftime(format_out)
+            # Handle None, empty string, or 'n/a'
+            if not time_str or str(time_str).lower() in ['n/a', 'none', '']:
+                return None
 
-            # Parse the input time string
-            if isinstance(time_str, datetime):
-                time_obj = time_str
-            else:
+            formats = [
+                "%m/%d/%Y %I:%M:%S %p",  # 02/17/2025 08:30:00 AM
+                "%m/%d/%Y %I:%M %p",     # 02/17/2025 08:30 AM
+                "%Y-%m-%d %I:%M %p",     # 2025-02-17 08:30 AM
+                "%I:%M %p"               # 08:30 AM
+            ]
+
+            for fmt in formats:
                 try:
-                    time_obj = datetime.strptime(time_str, format_in)
+                    time_obj = datetime.strptime(time_str.strip(), fmt)
+                    if fmt == "%I:%M %p":
+                        # For time-only format, use current date
+                        current = datetime.now(ZoneInfo("America/Chicago"))
+                        time_obj = time_obj.replace(
+                            year=current.year,
+                            month=current.month,
+                            day=current.day,
+                            tzinfo=current.tzinfo
+                        )
+                    else:
+                        # Add timezone info
+                        time_obj = time_obj.replace(tzinfo=ZoneInfo("America/Chicago"))
+                    return time_obj
                 except ValueError:
-                    # Try alternate format if first fails
-                    try:
-                        time_obj = datetime.strptime(time_str, '%Y-%m-%d %I:%M %p')
-                    except ValueError:
-                        logger.error(f"Could not parse time string: {time_str}")
-                        return current_time.strftime(format_out)
+                    continue
 
-            # Combine current date with parsed time
-            time_with_tz = current_time.replace(
-                hour=time_obj.hour,
-                minute=time_obj.minute,
-                second=0,
-                microsecond=0
-            )
+            logger.error(f"Could not parse time string: {time_str}")
+            return datetime.now(ZoneInfo("America/Chicago"))
 
-            return time_with_tz.strftime(format_out)
         except Exception as e:
-            logger.error(f"Error formatting time '{time_str}': {str(e)}")
-            return datetime.now(ZoneInfo("America/Chicago")).strftime(format_out)
+            logger.error(f"Error parsing time string '{time_str}': {str(e)}")
+            return datetime.now(ZoneInfo("America/Chicago"))
+
 
     @staticmethod
     def determine_price_trend(current_price, previous_prices):
@@ -94,23 +103,24 @@ class PriceMonitor:
 
             price_data = data[0]
             cleaned_price = PriceMonitor.clean_price_string(price_data.get('price', None))
-            formatted_time = PriceMonitor.format_time(price_data.get('LocalTimeinCST'))
+            formatted_time = PriceMonitor._parse_price_time(price_data.get('LocalTimeinCST'))
+            formatted_time_str = formatted_time.strftime('%Y-%m-%d %I:%M %p %Z') if formatted_time else None
 
             # Calculate trend using valid prices only
             recent_prices = [
-                PriceMonitor.clean_price_string(p.get('price')) 
+                PriceMonitor.clean_price_string(p.get('price'))
                 for p in data[:5]
             ]
             trend = PriceMonitor.determine_price_trend(cleaned_price, recent_prices)
 
             return {
                 'price': cleaned_price if cleaned_price is not None else "N/A",
-                'time': formatted_time,
+                'time': formatted_time_str,
                 'raw_time': price_data.get('LocalTimeinCST'),
                 'trend': trend,
                 'message': PriceMonitor.format_price_message(
                     cleaned_price if cleaned_price is not None else "N/A",
-                    formatted_time,
+                    formatted_time_str,
                     "5-minute"
                 )
             }
@@ -145,7 +155,7 @@ class PriceMonitor:
 
             # Find the current hour's data
             current_data = [
-                entry for entry in data 
+                entry for entry in data
                 if entry["DateTime"].split(":")[0].zfill(2) + ":00 " + entry["DateTime"].split()[-1] == current_hour
             ]
 
@@ -156,7 +166,8 @@ class PriceMonitor:
             hour_data = current_data[0]
             cleaned_price = PriceMonitor.clean_price_string(hour_data.get('RealTimePrice'))
             cleaned_day_ahead = PriceMonitor.clean_price_string(hour_data.get('DayAheadPrice'))
-            formatted_time = PriceMonitor.format_time(hour_data.get('DateTime'))
+            formatted_time = PriceMonitor._parse_price_time(hour_data.get('DateTime'))
+            formatted_time_str = formatted_time.strftime('%Y-%m-%d %I:%M %p %Z') if formatted_time else None
 
             # Calculate price range using valid prices
             if cleaned_price is not None and cleaned_day_ahead is not None:
@@ -169,7 +180,7 @@ class PriceMonitor:
 
             # Calculate trend using valid prices only
             recent_prices = [
-                PriceMonitor.clean_price_string(entry.get('RealTimePrice')) 
+                PriceMonitor.clean_price_string(entry.get('RealTimePrice'))
                 for entry in data[-3:]
                 if PriceMonitor.clean_price_string(entry.get('RealTimePrice')) is not None
             ]
@@ -178,13 +189,13 @@ class PriceMonitor:
             return {
                 'price': cleaned_price if cleaned_price is not None else "N/A",
                 'day_ahead_price': cleaned_day_ahead if cleaned_day_ahead is not None else "N/A",
-                'time': formatted_time,
+                'time': formatted_time_str,
                 'raw_time': hour_data.get('DateTime'),
                 'trend': trend,
                 'price_range': price_range,
                 'message': PriceMonitor.format_price_message(
                     cleaned_price if cleaned_price is not None else "N/A",
-                    formatted_time,
+                    formatted_time_str,
                     "hourly",
                     f"Day Ahead Price: {cleaned_day_ahead if cleaned_day_ahead is not None else 'N/A'}¢"
                 )
