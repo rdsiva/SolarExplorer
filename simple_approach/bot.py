@@ -31,24 +31,43 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await start(update, context)
 
 async def check_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Check and display current prices"""
+    """Check and display current prices with enhanced error handling"""
     try:
         await update.message.reply_text("🔍 Checking prices...")
         logger.info("Fetching current prices...")
 
-        price_data = price_monitor.get_current_prices()
-        message = price_monitor.format_message(price_data)
-        logger.info(f"Price data fetched successfully: {price_data}")
+        try:
+            price_data = price_monitor.get_current_prices()
+            logger.info(f"Successfully fetched price data: {price_data}")
 
-        await update.message.reply_text(message)
+            message = price_monitor.format_message(price_data)
+            await update.message.reply_text(message)
+
+        except RuntimeError as e:
+            # Handle case where both primary and fallback methods failed
+            error_msg = f"❌ Unable to fetch price data: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            await update.message.reply_text(
+                f"{error_msg}\n\nPlease try again later or contact support if the issue persists."
+            )
+
+        except ValueError as e:
+            # Handle validation errors
+            error_msg = f"❌ Invalid price data received: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            await update.message.reply_text(
+                f"{error_msg}\n\nThere might be an issue with the price data service."
+            )
 
     except Exception as e:
-        error_msg = f"❌ Error: {str(e)}"
+        error_msg = f"❌ Unexpected error while processing your request: {str(e)}"
         logger.error(error_msg, exc_info=True)
-        await update.message.reply_text(error_msg)
+        await update.message.reply_text(
+            f"{error_msg}\n\nPlease try again later."
+        )
 
 def main():
-    """Start the bot"""
+    """Start the bot with enhanced error handling"""
     try:
         # Get bot token from environment
         token = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -68,7 +87,7 @@ def main():
         application.run_polling(drop_pending_updates=True)
 
     except Exception as e:
-        logger.error(f"Bot error: {str(e)}", exc_info=True)
+        logger.critical(f"Bot failed to start: {str(e)}", exc_info=True)
         raise
 
 if __name__ == '__main__':

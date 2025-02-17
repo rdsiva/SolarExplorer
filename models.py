@@ -1,6 +1,10 @@
 from datetime import datetime, timedelta
 from app import db
-from typing import List
+from typing import List, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from typing import List
+    from . import PriceHistory
 
 class PriceHistory(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -17,9 +21,10 @@ class PriceHistory(db.Model):
         return f'<PriceHistory {self.timestamp}: provider={self.provider}, hourly={self.hourly_price}>'
 
     @staticmethod
-    def add_price_data(provider: str, hourly_price: float, hourly_average: float = None, 
-                      day_ahead_price: float = None, predicted_price: float = None, 
-                      prediction_confidence: float = None, timestamp: datetime = None):
+    def add_price_data(hourly_price: float, hourly_average: Optional[float] = None, 
+                      day_ahead_price: Optional[float] = None, predicted_price: Optional[float] = None, 
+                      prediction_confidence: Optional[float] = None, timestamp: Optional[datetime] = None, 
+                      provider: str = "ComEd") -> "PriceHistory":
         """Add new price data to the database"""
         price_record = PriceHistory(
             provider=provider,
@@ -45,7 +50,7 @@ class PriceHistory(db.Model):
         return False
 
     @staticmethod
-    def get_recent_history(provider: str, hours: int = 24) -> List[PriceHistory]:
+    def get_recent_history(provider: str, hours: int = 24) -> List["PriceHistory"]:
         """Get price history for the last specified hours for a specific provider"""
         cutoff_time = datetime.utcnow() - timedelta(hours=hours)
         return PriceHistory.query.filter(
@@ -54,7 +59,7 @@ class PriceHistory(db.Model):
         ).order_by(PriceHistory.timestamp.desc()).all()
 
     @staticmethod
-    def get_recent_predictions_with_accuracy(provider: str) -> List[PriceHistory]:
+    def get_recent_predictions_with_accuracy(provider: str) -> List["PriceHistory"]:
         """Get recent predictions that have accuracy feedback for a specific provider"""
         cutoff_time = datetime.utcnow() - timedelta(hours=72)  # Last 3 days
         return PriceHistory.query.filter(
