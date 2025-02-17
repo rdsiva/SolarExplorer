@@ -17,4 +17,5 @@ dependencies = [
     "twilio>=9.4.5",
     "numpy>=2.2.3",
     "sqlalchemy>=2.0.38",
+    "nest-asyncio>=1.6.0",
 ]

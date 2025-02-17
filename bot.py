@@ -2,7 +2,6 @@ import os
 import logging
 from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
-import asyncio
 import requests
 from datetime import datetime
 from config import TELEGRAM_BOT_TOKEN, HEALTH_CHECK_URL, MIN_RATE
@@ -20,12 +19,14 @@ logger = logging.getLogger(__name__)
 
 class EnergyPriceBot:
     def __init__(self):
-        """Initialize the bot with polling configuration"""
+        """Initialize the bot"""
         self.bot_token = TELEGRAM_BOT_TOKEN
+        if not self.bot_token:
+            raise ValueError("TELEGRAM_BOT_TOKEN is not set")
+
+        logger.info("Initializing bot with token: %s...", self.bot_token[:8])
         self.application = Application.builder().token(self.bot_token).build()
         self.bot = self.application.bot
-        logger.info("Initializing bot in polling mode")
-        self._setup_handlers()
 
     def _setup_handlers(self):
         """Set up command handlers for the bot"""
@@ -33,33 +34,48 @@ class EnergyPriceBot:
             logger.info("Setting up command handlers")
             self.application.add_handler(CommandHandler("start", self.cmd_start))
             self.application.add_handler(CommandHandler("help", self.cmd_help))
-            self.application.add_handler(CommandHandler("start_monitoring", self.cmd_start_monitoring))
-            self.application.add_handler(CommandHandler("stop_monitoring", self.cmd_stop_monitoring))
             self.application.add_handler(CommandHandler("check_price", self.cmd_check_price))
             self.application.add_handler(CommandHandler("status", self.cmd_status))
             self.application.add_handler(CallbackQueryHandler(self.handle_prediction_feedback))
-            logger.info("Command handlers setup completed successfully")
+            logger.info("Command handlers setup completed")
         except Exception as e:
             logger.error(f"Error setting up handlers: {str(e)}")
             raise
 
+    async def start(self):
+        """Start the bot"""
+        self._setup_handlers()
+        await self.application.initialize()
+        await self.application.start()
+        await self.application.run_polling(drop_pending_updates=True)
+
+    async def stop(self):
+        """Stop the bot"""
+        if self.application.running:
+            await self.application.stop()
+            await self.application.shutdown()
+
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the /start command"""
-        chat_id = update.effective_chat.id
-        welcome_message = (
-            f"👋 Welcome to the Energy Price Monitor Bot!\n\n"
-            f"Your Chat ID is: {chat_id}\n"
-            "Please save this ID in your .env file as TELEGRAM_CHAT_ID\n\n"
-            f"I can help you track energy prices and notify you when they fall below "
-            f"{MIN_RATE} cents.\n\n"
-            "Available commands:\n"
-            "/start_monitoring - Start price monitoring\n"
-            "/stop_monitoring - Stop price monitoring\n"
-            "/check_price - Check current prices\n"
-            "/status - Check monitoring status\n"
-            "/help - Show this help message"
-        )
-        await update.message.reply_text(welcome_message)
+        try:
+            chat_id = update.effective_chat.id
+            logger.info(f"Received /start command from chat_id: {chat_id}")
+            welcome_message = (
+                f"👋 Welcome to the Energy Price Monitor Bot!\n\n"
+                f"Your Chat ID is: {chat_id}\n"
+                "Please save this ID in your .env file as TELEGRAM_CHAT_ID\n\n"
+                f"I can help you track energy prices and notify you when they fall below "
+                f"{MIN_RATE} cents.\n\n"
+                "Available commands:\n"
+                "/check_price - Check current prices\n"
+                "/status - Check monitoring status\n"
+                "/help - Show this help message"
+            )
+            await update.message.reply_text(welcome_message)
+            logger.info(f"Sent welcome message to chat_id: {chat_id}")
+        except Exception as e:
+            logger.error(f"Error in /start command: {str(e)}")
+            await update.message.reply_text("Sorry, there was an error processing your command.")
 
     async def cmd_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the /help command"""
@@ -73,80 +89,6 @@ class EnergyPriceBot:
         except:
             return False
 
-    async def price_monitor_job(self, context: ContextTypes.DEFAULT_TYPE):
-        """Regular job to check prices and send notifications"""
-        try:
-            # Check both 5-minute and hourly prices
-            five_min_data = await PriceMonitor.check_five_min_price()
-            hourly_data = await PriceMonitor.check_hourly_price()
-
-            # Format the combined price data
-            price_data = {
-                'five_min_data': five_min_data,
-                'hourly_data': hourly_data
-            }
-
-            # Generate prediction data based on hourly price
-            current_price = float(hourly_data.get('price', 0))
-            predicted_price = round(current_price * 1.1, 1)  # Example prediction
-            prediction_data = {
-                'short_term_prediction': predicted_price,
-                'confidence': 75,
-                'trend': 'rising' if predicted_price > current_price else 'falling',
-                'next_hour_range': {
-                    'low': round(current_price * 0.9, 1),
-                    'high': round(current_price * 1.2, 1)
-                }
-            }
-
-            # Send alert with all data
-            await self.send_price_alert(context.job.chat_id, price_data, prediction_data)
-
-        except Exception as e:
-            error_message = f"❌ Error during price monitoring: {str(e)}"
-            logger.error(error_message)
-            await context.bot.send_message(
-                chat_id=context.job.chat_id,
-                text=error_message
-            )
-
-    async def cmd_start_monitoring(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Start the price monitoring job"""
-        chat_id = update.effective_chat.id
-
-        if 'monitoring_job' in context.chat_data:
-            await update.message.reply_text("⚠️ Monitoring is already active!")
-            return
-
-        if not await self.check_api_health():
-            await update.message.reply_text("❌ Cannot start monitoring - API is not accessible")
-            return
-
-        # Start monitoring job - runs every hour
-        job = context.job_queue.run_repeating(
-            self.price_monitor_job,
-            interval=3600,  # 1 hour
-            first=0,  # Run immediately
-            chat_id=chat_id
-        )
-        context.chat_data['monitoring_job'] = job
-
-        await update.message.reply_text(
-            "✅ Price monitoring started! You'll receive hourly updates and predictions "
-            f"when prices fall below {MIN_RATE} cents."
-        )
-
-    async def cmd_stop_monitoring(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Stop the price monitoring job"""
-        if 'monitoring_job' not in context.chat_data:
-            await update.message.reply_text("⚠️ No active monitoring to stop!")
-            return
-
-        job = context.chat_data['monitoring_job']
-        job.schedule_removal()
-        del context.chat_data['monitoring_job']
-        await update.message.reply_text("✅ Price monitoring stopped!")
-
     async def cmd_check_price(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Check current prices on demand with predictions"""
         try:
@@ -158,6 +100,9 @@ class EnergyPriceBot:
             # Get price data
             hourly_data = await PriceMonitor.check_hourly_price()
             five_min_data = await PriceMonitor.check_five_min_price()
+
+            logger.debug(f"Hourly data: {hourly_data}")
+            logger.debug(f"5-min data: {five_min_data}")
 
             current_price = float(hourly_data.get('price', 0))
 
@@ -173,12 +118,13 @@ class EnergyPriceBot:
                 }
             }
 
+            # Format the combined price data
             price_data = {
                 'five_min_data': five_min_data,
                 'hourly_data': hourly_data
             }
 
-            # Store prediction and send alert with feedback buttons
+            # Send alert with feedback buttons
             await self.send_price_alert(chat_id, price_data, prediction_data)
             logger.info(f"Price check completed for chat_id: {chat_id}")
 
@@ -190,12 +136,9 @@ class EnergyPriceBot:
     async def cmd_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Check the monitoring status"""
         api_status = "✅ Online" if await self.check_api_health() else "❌ Offline"
-        monitoring_status = "✅ Active" if 'monitoring_job' in context.chat_data else "❌ Inactive"
-
         status_message = (
             "📊 System Status\n"
             f"API Status: {api_status}\n"
-            f"Monitoring: {monitoring_status}\n"
             f"Price Threshold: {MIN_RATE} cents"
         )
         await update.message.reply_text(status_message)
@@ -214,30 +157,35 @@ class EnergyPriceBot:
                 )
                 price_record_id = price_record.id
 
-        # Format message with price and prediction data
         message = self._format_price_message(price_data, prediction_data)
+        logger.debug(f"Formatted message: {message}")
 
-        # Add feedback buttons if there's a prediction
-        if price_record_id is not None:
-            keyboard = [
-                [
-                    InlineKeyboardButton("✅ Accurate", callback_data=f"feedback_accurate_{price_record_id}"),
-                    InlineKeyboardButton("❌ Inaccurate", callback_data=f"feedback_inaccurate_{price_record_id}")
+        try:
+            # Add feedback buttons if there's a prediction
+            if price_record_id is not None:
+                keyboard = [
+                    [
+                        InlineKeyboardButton("✅ Accurate", callback_data=f"feedback_accurate_{price_record_id}"),
+                        InlineKeyboardButton("❌ Inaccurate", callback_data=f"feedback_inaccurate_{price_record_id}")
+                    ]
                 ]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await self.bot.send_message(
-                chat_id=chat_id,
-                text=message,
-                reply_markup=reply_markup,
-                parse_mode='HTML'
-            )
-        else:
-            await self.bot.send_message(
-                chat_id=chat_id,
-                text=message,
-                parse_mode='HTML'
-            )
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await self.bot.send_message(
+                    chat_id=chat_id,
+                    text=message,
+                    reply_markup=reply_markup,
+                    parse_mode='HTML'
+                )
+            else:
+                await self.bot.send_message(
+                    chat_id=chat_id,
+                    text=message,
+                    parse_mode='HTML'
+                )
+            logger.info(f"Successfully sent price alert to chat_id: {chat_id}")
+        except Exception as e:
+            logger.error(f"Error sending price alert: {str(e)}")
+            raise
 
     async def handle_prediction_feedback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle feedback on price predictions"""
@@ -311,14 +259,6 @@ class EnergyPriceBot:
             message += f"• Confidence: {prediction_data['confidence']}%\n"
             message += f"• Trend: {prediction_data['trend'].capitalize()}\n\n"
 
-            # Add specific recommendation based on prediction
-            if prediction_data['trend'] == 'rising' and prediction_data['confidence'] >= 70:
-                message += "⚠️ <b>Price Trend Warning:</b>\n"
-                message += "Prices expected to rise. Consider using power now.\n\n"
-            elif prediction_data['trend'] == 'falling' and prediction_data['confidence'] >= 70:
-                message += "💡 <b>Price Trend Opportunity:</b>\n"
-                message += "Prices expected to fall. Consider delaying usage if possible.\n\n"
-
         # Add timestamp in CST
         cst_time = datetime.now(ZoneInfo("America/Chicago"))
         message += f"\n⏰ Last Updated: {cst_time.strftime('%Y-%m-%d %I:%M %p %Z')}"
@@ -330,28 +270,11 @@ class EnergyPriceBot:
 
         return message
 
-    async def run(self):
-        """Start the bot in polling mode"""
-        try:
-            logger.info("Starting the bot in polling mode...")
-            await self.application.initialize()
-            await self.application.start()
-            await self.application.run_polling(allowed_updates=Update.ALL_TYPES)
-        except Exception as e:
-            logger.error(f"Error running bot: {str(e)}")
-            raise
-        finally:
-            if self.application.running:
-                try:
-                    await self.application.stop()
-                except Exception as e:
-                    logger.error(f"Error stopping application: {str(e)}")
-
-
 if __name__ == '__main__':
+    bot = EnergyPriceBot()
     try:
-        bot = EnergyPriceBot()
-        asyncio.run(bot.run())
+        import asyncio
+        asyncio.run(bot.start())
     except KeyboardInterrupt:
         logger.info("Bot stopped by user")
     except Exception as e:
