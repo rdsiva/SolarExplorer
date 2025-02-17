@@ -1,10 +1,12 @@
 import os
 import logging
+import asyncio
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from modules import ModuleManager, PriceMonitorModule
+from telegram.error import Conflict, NetworkError, TelegramError
 
 # Configure logging
 logging.basicConfig(
@@ -22,8 +24,26 @@ if not TELEGRAM_BOT_TOKEN:
 # Initialize ModuleManager and price module
 module_manager = ModuleManager()
 price_module = PriceMonitorModule()
-module_manager.register_module(price_module)
-module_manager.enable_module("price_monitor")
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle errors caused by updates."""
+    try:
+        if isinstance(context.error, Conflict):
+            logger.warning("Another bot instance is running. Shutting down this instance.")
+            return
+
+        if isinstance(context.error, NetworkError):
+            logger.error("Network error occurred:", exc_info=context.error)
+            return
+
+        if isinstance(context.error, TelegramError):
+            logger.error("Telegram API error occurred:", exc_info=context.error)
+            return
+
+        logger.error("Update caused error", exc_info=context.error)
+
+    except Exception as e:
+        logger.error(f"Error in error handler: {str(e)}", exc_info=True)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send welcome message when /start is issued"""
@@ -76,22 +96,33 @@ async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(error_msg)
 
 def main():
-    """Start the bot with core functionality"""
+    """Start the bot with improved error handling"""
     try:
+        # Register and enable the price monitor module
+        module_manager.register_module(price_module)
+        module_manager.enable_module("price_monitor")
+
         # Create application with error handling
         application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+
+        # Register error handler
+        application.add_error_handler(error_handler)
 
         # Add core command handlers
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CommandHandler("help", help_command))
         application.add_handler(CommandHandler("check", check))
 
-        # Start polling
+        # Start polling with clean session
         logger.info("Starting bot...")
         application.run_polling(drop_pending_updates=True)
 
+    except Conflict:
+        logger.warning("Another bot instance is already running")
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user")
     except Exception as e:
-        logger.error(f"Error starting bot: {str(e)}", exc_info=True)
+        logger.error(f"Critical error: {str(e)}", exc_info=True)
         raise
 
 if __name__ == '__main__':
