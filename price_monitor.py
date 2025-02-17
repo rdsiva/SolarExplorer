@@ -3,6 +3,7 @@ import json
 from datetime import datetime
 import logging
 from config import FIVE_MIN_PRICE_URL, HOURLY_PRICE_URL, MIN_RATE
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
@@ -25,10 +26,10 @@ class PriceMonitor:
             response = requests.get(FIVE_MIN_PRICE_URL)
             response.raise_for_status()
             data = response.json()
-            
+
             if not data:
                 raise ValueError("Empty response from five minute price API")
-                
+
             price_data = data[0]
             return {
                 'price': price_data['price'],
@@ -46,26 +47,39 @@ class PriceMonitor:
     @staticmethod
     async def check_hourly_price():
         try:
-            today_date = datetime.now().strftime("%Y%m%d")
-            response = requests.get(f"{HOURLY_PRICE_URL}?queryDate={today_date}")
+            cst_now = datetime.now(ZoneInfo("America/Chicago"))
+            today_date = cst_now.strftime("%Y%m%d")
+            logger.debug(f"Querying hourly price for CST date: {today_date}")
+
+            api_url = f"{HOURLY_PRICE_URL}?queryDate={today_date}"
+            logger.debug(f"Making API request to: {api_url}")
+
+            response = requests.get(api_url)
             response.raise_for_status()
             data = response.json()
 
             if not data:
                 raise ValueError("Empty response from hourly price API")
 
-            current_time = datetime.now().strftime("%I:00 %p")
+            current_time = cst_now.strftime("%I:00 %p")
+            logger.debug(f"Looking for hourly price at CST time: {current_time}")
+            logger.debug(f"API response contains {len(data)} records")
+
             current_data = [
                 entry for entry in data 
                 if entry["DateTime"].split(":")[0].zfill(2) + ":" + entry["DateTime"].split(":")[1] == current_time
             ]
 
             if not current_data:
+                logger.warning(f"No data found for current hour: {current_time}")
+                logger.debug("Available times in response: " + ", ".join(
+                    sorted(set(entry["DateTime"] for entry in data))
+                ))
                 raise ValueError(f"No data found for current hour: {current_time}")
 
             hour_data = current_data[0]
             additional_info = f"Day Ahead Price: {hour_data['DayAheadPrice']} cents"
-            
+
             return {
                 'price': hour_data['RealTimePrice'],
                 'time': hour_data['DateTime'],

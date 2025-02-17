@@ -4,9 +4,9 @@ import asyncio
 import logging
 from datetime import datetime
 import requests
-
 from config import TELEGRAM_BOT_TOKEN, HEALTH_CHECK_URL, MIN_RATE
 from price_monitor import PriceMonitor
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +121,10 @@ class EnergyPriceBot:
         try:
             await update.message.reply_text("🔍 Checking current prices...")
 
+            # Log current CST time for verification
+            cst_time = await self.test_cst_time()
+            logger.info(f"Initiating price check at CST: {cst_time}")
+
             five_min_data = await PriceMonitor.check_five_min_price()
             await update.message.reply_text(five_min_data['message'])
 
@@ -128,7 +132,9 @@ class EnergyPriceBot:
             await update.message.reply_text(hourly_data['message'])
 
         except Exception as e:
-            await update.message.reply_text(f"❌ Error checking prices: {str(e)}")
+            error_msg = f"❌ Error checking prices: {str(e)}"
+            logger.error(error_msg)
+            await update.message.reply_text(error_msg)
 
     async def cmd_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Check the monitoring status"""
@@ -142,6 +148,13 @@ class EnergyPriceBot:
             f"Price Threshold: {MIN_RATE} cents"
         )
         await update.message.reply_text(status_message)
+
+    async def test_cst_time(self):
+        """Test CST time calculation"""
+        cst_now = datetime.now(ZoneInfo("America/Chicago"))
+        logger.info(f"Current CST Time: {cst_now.strftime('%Y-%m-%d %I:%M %p')}")
+        return cst_now
+
 
     def run(self):
         """Start the bot"""
