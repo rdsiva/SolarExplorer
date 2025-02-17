@@ -8,7 +8,6 @@ import asyncio
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from models import PriceHistory
-from app import app
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +55,19 @@ class NotificationAgent(BaseAgent):
         self.notification_queue.append(notification_data)
         await self.process_queue()
 
+    def store_prediction(self, price_data: Dict[str, Any], prediction: Dict[str, Any]) -> int:
+        """Store prediction in database"""
+        from app import app  # Import here to avoid circular dependency
+
+        with app.app_context():
+            price_record = PriceHistory(
+                hourly_price=price_data["hourly_data"]["price"],
+                predicted_price=prediction["short_term_prediction"],
+                prediction_confidence=prediction["confidence"]
+            )
+            price_record.save()
+            return price_record.id
+
     async def process_queue(self) -> None:
         if not self.bot:
             logger.error("Telegram bot not initialized")
@@ -67,13 +79,10 @@ class NotificationAgent(BaseAgent):
                 price_record_id = None
                 # Store prediction in database first if available
                 if notification.get("prediction", {}).get("short_term_prediction"):
-                    with app.app_context():
-                        price_record = PriceHistory.add_price_data(
-                            hourly_price=notification["price_data"]["hourly_data"]["price"],
-                            predicted_price=notification["prediction"]["short_term_prediction"],
-                            prediction_confidence=notification["prediction"]["confidence"]
-                        )
-                        price_record_id = price_record.id
+                    price_record_id = self.store_prediction(
+                        notification["price_data"],
+                        notification["prediction"]
+                    )
 
                 # Format message with price data, analysis, and predictions
                 message = self._format_notification_message(

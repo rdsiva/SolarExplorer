@@ -30,7 +30,10 @@
         {% for agent in agents %}
         <div class="bg-white rounded-lg shadow p-6">
             <div class="flex justify-between items-start mb-4">
-                <h3 class="text-xl font-semibold">{{ agent.name }}</h3>
+                <div>
+                    <h3 class="text-xl font-semibold">{{ agent.name }}</h3>
+                    <p class="text-sm text-gray-500">{{ agent.type }}</p>
+                </div>
                 <span class="px-3 py-1 rounded-full text-sm font-medium {{ agent.status_class }}">
                     {{ agent.status_text }}
                 </span>
@@ -45,8 +48,17 @@
                     <p class="text-sm text-gray-600">Last Run</p>
                     <p class="text-lg font-medium">{{ agent.last_run }}</p>
                 </div>
+                <div>
+                    <p class="text-sm text-gray-600">Queue Size</p>
+                    <p class="text-lg font-medium">{{ agent.queue_size }}</p>
+                </div>
+                <div>
+                    <p class="text-sm text-gray-600">Failures</p>
+                    <p class="text-lg font-medium">{{ agent.consecutive_failures }}</p>
+                </div>
             </div>
 
+            {% if agent.subscriptions %}
             <div class="mb-4">
                 <p class="text-sm text-gray-600 mb-2">Subscribed Messages</p>
                 <div class="flex flex-wrap gap-2">
@@ -57,13 +69,16 @@
                     {% endfor %}
                 </div>
             </div>
+            {% endif %}
 
             {% if agent.last_error %}
             <div class="mt-4 p-3 bg-red-50 rounded-lg">
                 <p class="text-sm text-red-800">
                     <span class="font-medium">Last Error:</span> {{ agent.last_error }}
                 </p>
+                {% if agent.last_error_time %}
                 <p class="text-xs text-red-600">{{ agent.last_error_time }}</p>
+                {% endif %}
             </div>
             {% endif %}
 
