@@ -27,7 +27,8 @@ app.config['SECRET_KEY'] = os.environ.get('SESSION_SECRET', 'dev-secret-key')
 WEBHOOK_URL = "https://1a8446b3-198e-4458-9e5f-60fa0a94ff1f-00-1nh6gkpmzmrcg.janeway.replit.dev/telegram/webhook"
 logger.info(f"Using webhook URL: {WEBHOOK_URL}")
 
-# Initialize bot at module level
+# Initialize bot and application at module level
+bot = None
 application = None
 
 async def check_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -44,6 +45,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         chat_id = update.effective_chat.id
         logger.info(f"Received /start command from chat_id: {chat_id}")
+        logger.info(f"User info: {update.effective_user.to_dict()}")
 
         welcome_message = (
             "👋 Welcome to the Energy Price Monitor Bot!\n\n"
@@ -51,11 +53,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "/check - Check current prices\n"
             "/help - Show this help message"
         )
+        logger.info(f"Sending welcome message to chat_id: {chat_id}")
         await update.message.reply_text(welcome_message)
-        logger.info(f"Sent welcome message to user {update.effective_user.id}")
+        logger.info(f"Welcome message sent successfully to user {update.effective_user.id}")
     except Exception as e:
-        logger.error(f"Error in start command: {str(e)}", exc_info=True)
-        await update.message.reply_text("Sorry, there was an error processing your command.")
+        error_msg = f"Error in start command: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        try:
+            await update.message.reply_text("Sorry, there was an error processing your command.")
+        except Exception as send_error:
+            logger.error(f"Failed to send error message: {str(send_error)}", exc_info=True)
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /help command"""
@@ -134,6 +141,9 @@ async def webhook():
         # Process update
         update = Update.de_json(update_data, application.bot)
         if update:
+            logger.info(f"Update type: {update.message and 'message' or update.callback_query and 'callback' or 'unknown'}")
+            if update.message and update.message.text:
+                logger.info(f"Received command: {update.message.text}")
             await application.process_update(update)
             logger.info("Update processed successfully")
             return jsonify({'status': 'ok'})
@@ -154,50 +164,56 @@ def root():
         'webhook_url': WEBHOOK_URL
     })
 
-def create_app():
-    """Initialize the Flask app and Telegram bot"""
+def initialize_bot():
+    """Initialize the bot application"""
     global application
 
     try:
+        logger.info("Starting bot initialization...")
         if not TELEGRAM_BOT_TOKEN:
             raise ValueError("TELEGRAM_BOT_TOKEN environment variable is not set")
 
-        # Enable nested asyncio
+        logger.info("Enabling nested asyncio support...")
         nest_asyncio.apply()
 
-        # Create and configure event loop
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-
-        # Initialize bot application
+        logger.info("Creating bot application...")
         application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
         # Add command handlers
+        logger.info("Adding command handlers...")
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CommandHandler("help", help_command))
         application.add_handler(CommandHandler("check", check_price))
 
-        # Initialize application and set up webhook
-        loop.run_until_complete(application.initialize())
-        success = loop.run_until_complete(setup_webhook(application))
+        logger.info("Setting up event loop...")
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
 
+        # Initialize application
+        logger.info("Initializing application...")
+        loop.run_until_complete(application.initialize())
+
+        # Setup webhook
+        logger.info("Setting up webhook...")
+        success = loop.run_until_complete(setup_webhook(application))
         if not success:
             raise ValueError("Failed to set up webhook")
 
         # Verify bot
+        logger.info("Verifying bot configuration...")
         bot_info = loop.run_until_complete(application.bot.get_me())
-        logger.info(f"Bot initialized: @{bot_info.username}")
+        logger.info(f"Bot initialized successfully: @{bot_info.username}")
 
-        return app
+        return True
 
     except Exception as e:
-        logger.error(f"Failed to create app: {str(e)}", exc_info=True)
-        raise
+        logger.error(f"Failed to initialize bot: {str(e)}", exc_info=True)
+        return False
+
+# Initialize the bot when this module is imported
+if not initialize_bot():
+    logger.error("Failed to initialize the bot application")
+    raise RuntimeError("Bot initialization failed")
 
 if __name__ == '__main__':
-    try:
-        app = create_app()
-        app.run(host='0.0.0.0', port=5000, debug=True)
-    except Exception as e:
-        logger.error(f"Failed to start server: {str(e)}", exc_info=True)
-        raise
+    app.run(host='0.0.0.0', port=5000, debug=True)
