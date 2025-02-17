@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container mx-auto px-4 py-8">
+    <h1 class="text-3xl font-bold mb-6">Agent Monitoring Dashboard</h1>
+    
+    <!-- Overall System Status -->
+    <div class="bg-white rounded-lg shadow p-6 mb-8">
+        <h2 class="text-xl font-semibold mb-4">System Overview</h2>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div class="bg-gray-50 p-4 rounded-lg">
+                <h3 class="text-lg font-medium mb-2">Active Agents</h3>
+                <p class="text-2xl font-bold text-green-600">{{ active_agents }}/{{ total_agents }}</p>
+            </div>
+            <div class="bg-gray-50 p-4 rounded-lg">
+                <h3 class="text-lg font-medium mb-2">Total Messages</h3>
+                <p class="text-2xl font-bold text-blue-600">{{ total_messages }}</p>
+            </div>
+            <div class="bg-gray-50 p-4 rounded-lg">
+                <h3 class="text-lg font-medium mb-2">System Status</h3>
+                <p class="text-2xl font-bold {{ 'text-green-600' if system_healthy else 'text-red-600' }}">
+                    {{ 'Healthy' if system_healthy else 'Warning' }}
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Agent Status Cards -->
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+        {% for agent in agents %}
+        <div class="bg-white rounded-lg shadow p-6">
+            <div class="flex justify-between items-start mb-4">
+                <h3 class="text-xl font-semibold">{{ agent.name }}</h3>
+                <span class="px-3 py-1 rounded-full text-sm font-medium
+                    {% if agent.running %}
+                        bg-green-100 text-green-800
+                    {% else %}
+                        bg-red-100 text-red-800
+                    {% endif %}
+                ">
+                    {{ "Active" if agent.running else "Inactive" }}
+                </span>
+            </div>
+
+            <div class="grid grid-cols-2 gap-4 mb-4">
+                <div>
+                    <p class="text-sm text-gray-600">Queue Size</p>
+                    <p class="text-lg font-medium">{{ agent.queue_size }}</p>
+                </div>
+                <div>
+                    <p class="text-sm text-gray-600">Last Run</p>
+                    <p class="text-lg font-medium">{{ agent.last_run or 'Never' }}</p>
+                </div>
+            </div>
+
+            <div class="mb-4">
+                <p class="text-sm text-gray-600 mb-2">Subscriptions</p>
+                <div class="flex flex-wrap gap-2">
+                    {% for sub in agent.subscriptions %}
+                    <span class="px-2 py-1 bg-blue-100 text-blue-800 rounded-full text-xs">
+                        {{ sub }}
+                    </span>
+                    {% endfor %}
+                </div>
+            </div>
+
+            {% if agent.last_error %}
+            <div class="mt-4 p-3 bg-red-50 rounded-lg">
+                <p class="text-sm text-red-800">
+                    <span class="font-medium">Last Error:</span> {{ agent.last_error }}
+                </p>
+                <p class="text-xs text-red-600">{{ agent.last_error_time }}</p>
+            </div>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endblock %}

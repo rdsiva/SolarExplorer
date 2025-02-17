@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agent Management System</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <nav class="bg-white shadow-lg">
+        <div class="max-w-7xl mx-auto px-4">
+            <div class="flex justify-between h-16">
+                <div class="flex">
+                    <div class="flex-shrink-0 flex items-center">
+                        <span class="text-xl font-bold">Agent Management</span>
+                    </div>
+                    <div class="hidden md:flex md:items-center md:ml-6">
+                        <a href="/" class="px-3 py-2 rounded-md text-sm font-medium text-gray-700 hover:text-gray-900">Home</a>
+                        <a href="/agent-monitor" class="px-3 py-2 rounded-md text-sm font-medium text-gray-700 hover:text-gray-900">Monitoring</a>
+                        <a href="/dashboard" class="px-3 py-2 rounded-md text-sm font-medium text-gray-700 hover:text-gray-900">Analytics</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <main>
+        {% block content %}{% endblock %}
+    </main>
+
+    <script>
+        // Auto-refresh the dashboard every 30 seconds if we're on the monitoring page
+        if (window.location.pathname === '/agent-monitor') {
+            setInterval(() => {
+                window.location.reload();
+            }, 30000);
+        }
+    </script>
+</body>
+</html>

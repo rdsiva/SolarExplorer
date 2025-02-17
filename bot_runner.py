@@ -8,7 +8,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 from agents.live_price_agent import LivePriceAgent
 from agents.protocols.message_protocol import Message, MessageType, MessagePriority
 
-# Enable nested event loops
+# Enable nested event loops for compatibility
 nest_asyncio.apply()
 
 # Configure logging
@@ -23,9 +23,11 @@ class BotRunner:
 
     def __init__(self):
         """Initialize the bot runner."""
-        self.price_agent = LivePriceAgent(config={'price_threshold': 3.0, 'check_interval': 300})
+        self.price_agent = None
         self.application = None
         self.is_running = False
+        self._price_agent_task = None
+        self._cleanup_event = asyncio.Event()
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Send a message when the command /start is issued."""
@@ -47,6 +49,10 @@ class BotRunner:
     async def get_price(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Get current energy prices when /price command is issued."""
         try:
+            if not self.price_agent:
+                await update.message.reply_text("⚠️ Price agent is not initialized.")
+                return
+
             # Create a command message
             command_msg = Message(
                 msg_type=MessageType.COMMAND,
@@ -74,6 +80,9 @@ class BotRunner:
         try:
             logger.info("Starting bot initialization...")
 
+            # Initialize the price agent first
+            self.price_agent = LivePriceAgent(config={'price_threshold': 3.0, 'check_interval': 300})
+
             # Get token from environment variable
             token = os.environ.get("TELEGRAM_BOT_TOKEN")
             if not token:
@@ -82,7 +91,6 @@ class BotRunner:
 
             # Create the Application
             self.application = Application.builder().token(token).build()
-            await self.application.initialize()
 
             # Add command handlers
             logger.info("Adding command handlers...")
@@ -90,13 +98,10 @@ class BotRunner:
             self.application.add_handler(CommandHandler("help", self.help_command))
             self.application.add_handler(CommandHandler("price", self.get_price))
 
-            # Start the price agent
-            logger.info("Starting LivePrice agent...")
-            await self.price_agent.start()
-            self.is_running = True
-
             logger.info("Bot initialization completed successfully")
+            self.is_running = True
             return True
+
         except Exception as e:
             logger.error(f"Error initializing bot: {str(e)}")
             return False
@@ -108,12 +113,29 @@ class BotRunner:
                 if not await self.initialize():
                     return
 
+            logger.info("Starting LivePrice agent...")
+            # Start the price agent in the background
+            self._price_agent_task = asyncio.create_task(self.price_agent.start())
+
             logger.info("Starting Telegram bot...")
-            # Start the application
+            await self.application.initialize()
             await self.application.start()
 
-            # Run the bot
-            await self.application.run_polling(allowed_updates=Update.ALL_TYPES)
+            # Set up cleanup event
+            self._cleanup_event.clear()
+
+            # Run the bot until stopped
+            await self.application.run_polling(
+                allowed_updates=Update.ALL_TYPES,
+                stop_signals=None,
+                close_loop=False
+            )
+
+            # Wait for cleanup signal
+            await self._cleanup_event.wait()
+
+        except asyncio.CancelledError:
+            logger.info("Bot operation was cancelled")
         except Exception as e:
             logger.error(f"Error running bot: {str(e)}")
         finally:
@@ -124,11 +146,27 @@ class BotRunner:
         try:
             logger.info("Shutting down bot...")
             self.is_running = False
+
+            # Cancel price agent task if it exists
+            if self._price_agent_task and not self._price_agent_task.done():
+                self._price_agent_task.cancel()
+                try:
+                    await self._price_agent_task
+                except asyncio.CancelledError:
+                    pass
+
             if self.price_agent:
                 await self.price_agent.stop()
+
             if self.application:
-                await self.application.stop()
-                await self.application.shutdown()
+                try:
+                    await self.application.stop()
+                    await self.application.shutdown()
+                except Exception as e:
+                    logger.error(f"Error during application shutdown: {str(e)}")
+
+            # Signal cleanup completion
+            self._cleanup_event.set()
             logger.info("Bot shutdown completed")
         except Exception as e:
             logger.error(f"Error during shutdown: {str(e)}")
@@ -138,9 +176,20 @@ def main():
     try:
         logger.info("Starting bot runner...")
         bot_runner = BotRunner()
-        asyncio.run(bot_runner.run())
-    except KeyboardInterrupt:
-        logger.info("Bot stopped by user")
+
+        # Create new event loop
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        try:
+            # Run the bot
+            loop.run_until_complete(bot_runner.run())
+        except KeyboardInterrupt:
+            logger.info("Bot stopped by user")
+            # Ensure cleanup
+            loop.run_until_complete(bot_runner.shutdown())
+        finally:
+            loop.close()
     except Exception as e:
         logger.error(f"Unexpected error: {str(e)}")
 

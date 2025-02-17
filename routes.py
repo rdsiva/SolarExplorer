@@ -7,6 +7,13 @@ from models import UserPreferences, UserAnalytics, SavingsInsight, PriceHistory,
 from agents.tesla_charging_agent import TeslaAPI
 import logging
 import os
+from typing import Dict, List, Any
+from agents.base_agent import BaseAgent
+from agents.live_price_agent import LivePriceAgent
+from agents.notification_agent import NotificationAgent
+from agents.analysis_agent import AnalysisAgent
+from agents.data_collection_agent import DataCollectionAgent
+
 
 logger = logging.getLogger(__name__)
 
@@ -292,3 +299,42 @@ def test_tesla_callback():
         'message': 'Tesla OAuth callback test endpoint is accessible',
         'callback_url': callback_url
     })
+
+@app.route('/agent-monitor')
+def agent_monitor():
+    """Display the agent monitoring dashboard."""
+    try:
+        # Initialize agents if needed (in real app these would be persistent)
+        agents: List[BaseAgent] = [
+            LivePriceAgent(config={'price_threshold': 3.0, 'check_interval': 300}),
+            NotificationAgent(),
+            AnalysisAgent(),
+            DataCollectionAgent()
+        ]
+
+        # Collect agent statuses
+        agent_statuses = [agent.get_status() for agent in agents]
+
+        # Calculate dashboard metrics
+        total_agents = len(agents)
+        active_agents = sum(1 for status in agent_statuses if status.get('running', False))
+        total_messages = sum(status.get('queue_size', 0) for status in agent_statuses)
+        system_healthy = all(
+            not status.get('last_error')
+            and (status.get('consecutive_failures', 0) == 0)
+            for status in agent_statuses
+        )
+
+        return render_template(
+            'agent_dashboard.html',
+            agents=agent_statuses,
+            total_agents=total_agents,
+            active_agents=active_agents,
+            total_messages=total_messages,
+            system_healthy=system_healthy
+        )
+
+    except Exception as e:
+        logger.error(f"Error displaying agent monitor: {str(e)}")
+        return render_template('error.html',
+            message="An error occurred while loading the agent monitor."), 500

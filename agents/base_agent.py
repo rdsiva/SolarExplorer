@@ -18,7 +18,12 @@ class BaseAgent(ABC):
         self.running = False
         self.last_run = None
         self.message_queue = asyncio.Queue()
-        self.subscriptions = set()  # Message types the agent is interested in
+        self.subscriptions = set()
+        self.last_error: Optional[str] = None
+        self.last_error_time: Optional[datetime] = None
+        self.consecutive_failures = 0
+        self.total_messages_processed = 0
+        self.start_time = None
         logger.info(f"Initialized {self.name} agent")
 
     @abstractmethod
@@ -84,13 +89,14 @@ class BaseAgent(ABC):
         """Start the agent."""
         try:
             self.running = True
+            self.start_time = datetime.utcnow()
             self.last_run = datetime.utcnow()
             logger.info(f"Started {self.name} agent")
 
-            # Start message processing loop
             while self.running:
                 message = await self.receive_message()
                 if message:
+                    self.total_messages_processed += 1
                     response = await self.process(message)
                     if response:
                         await self.send_message(
@@ -101,6 +107,9 @@ class BaseAgent(ABC):
                             correlation_id=response.correlation_id
                         )
         except Exception as e:
+            self.last_error = str(e)
+            self.last_error_time = datetime.utcnow()
+            self.consecutive_failures += 1
             logger.error(f"Error in {self.name} agent message loop: {str(e)}")
             self.running = False
 
@@ -113,13 +122,22 @@ class BaseAgent(ABC):
             logger.error(f"Error stopping {self.name} agent: {str(e)}")
 
     def get_status(self) -> Dict[str, Any]:
-        """Get the current status of the agent."""
+        """Get detailed status information about the agent."""
+        current_time = datetime.utcnow()
+        uptime = (current_time - self.start_time).total_seconds() if self.start_time else 0
+
         return {
             'name': self.name,
             'running': self.running,
             'last_run': self.last_run.isoformat() if self.last_run else None,
             'queue_size': self.message_queue.qsize(),
-            'subscriptions': [sub.value for sub in self.subscriptions]
+            'subscriptions': [sub.value for sub in self.subscriptions],
+            'last_error': self.last_error,
+            'last_error_time': self.last_error_time.isoformat() if self.last_error_time else None,
+            'consecutive_failures': self.consecutive_failures,
+            'total_messages_processed': self.total_messages_processed,
+            'uptime_seconds': uptime,
+            'config': self.config
         }
 
     def __str__(self):

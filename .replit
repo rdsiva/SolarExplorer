@@ -47,6 +47,10 @@ args = "LivePrice Agent Test"
 task = "workflow.run"
 args = "Price Alert Bot"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Flask Server"
+
 [[workflows.workflow]]
 name = "Telegram Price Monitor"
 author = "agent"
@@ -160,9 +164,28 @@ task = "packager.installForAll"
 task = "shell.exec"
 args = "python bot_runner.py"
 
+[[workflows.workflow]]
+name = "Flask Server"
+author = "agent"
+
+[workflows.workflow.metadata]
+agentRequireRestartOnSave = false
+
+[[workflows.workflow.tasks]]
+task = "packager.installForAll"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "python -m flask run --host=0.0.0.0 --port=5001"
+waitForPort = 5001
+
 [[ports]]
 localPort = 5000
 externalPort = 80
+
+[[ports]]
+localPort = 5001
+externalPort = 3000
 
 [[ports]]
 localPort = 8080

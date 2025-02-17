@@ -83,107 +83,8 @@ try:
     with app.app_context():
         module_manager = init_modules()
 
-    @app.route('/module-management')
-    def module_management():
-        """View for module management interface"""
-        try:
-            logger.info("Accessing module management view")
-            modules = module_manager.get_all_modules()
-            logger.info(f"Retrieved modules: {modules}")
-            return render_template('module_manager.html', modules=modules)
-        except Exception as e:
-            logger.error(f"Error in module management view: {str(e)}", exc_info=True)
-            return f"Error loading module management: {str(e)}", 500
-
-    @app.route('/dashboard')
-    def dashboard():
-        """Main dashboard view"""
-        try:
-            logger.info("Accessing dashboard view")
-            from models import PriceHistory
-
-            # Get recent price history
-            recent_prices = PriceHistory.query.order_by(
-                PriceHistory.timestamp.desc()
-            ).limit(24).all()  # Last 24 records
-
-            # If no data exists, create sample data
-            if not recent_prices:
-                logger.info("No price data found, creating sample data")
-                create_sample_data()
-                recent_prices = PriceHistory.query.order_by(
-                    PriceHistory.timestamp.desc()
-                ).limit(24).all()
-
-            return render_template(
-                'dashboard.html',
-                prices=recent_prices,
-                modules=module_manager.get_all_modules()
-            )
-        except Exception as e:
-            logger.error(f"Error in dashboard view: {str(e)}", exc_info=True)
-            return f"Error loading dashboard: {str(e)}", 500
-
-    def create_sample_data():
-        """Create sample price history data for demonstration"""
-        try:
-            from models import PriceHistory
-            now = datetime.utcnow()
-
-            # Generate 24 hours of sample data
-            for i in range(24):
-                timestamp = now - timedelta(hours=i)
-                # Generate realistic-looking price data between 2.5 and 4.5 cents
-                price = round(random.uniform(2.5, 4.5), 2)
-
-                record = PriceHistory(
-                    timestamp=timestamp,
-                    provider='ComEd',
-                    hourly_price=price,
-                    hourly_average=price,  # For simplicity, using same value
-                    day_ahead_price=price + random.uniform(-0.5, 0.5),  # Slight variation
-                )
-                db.session.add(record)
-
-            db.session.commit()
-            logger.info("Sample price data created successfully")
-        except Exception as e:
-            logger.error(f"Error creating sample data: {str(e)}", exc_info=True)
-            db.session.rollback()
-
-    @app.route('/api/modules/<module_name>', methods=['POST'])
-    def toggle_module(module_name):
-        """API endpoint to toggle module state"""
-        try:
-            if module_name == 'price_monitor':
-                return jsonify({
-                    'success': False,
-                    'message': 'Price monitor module cannot be disabled as it is required.'
-                }), 400
-
-            data = request.get_json()
-            if not data or 'action' not in data:
-                return jsonify({
-                    'success': False,
-                    'message': 'Missing action parameter'
-                }), 400
-
-            action = data['action']
-            if action not in ['enable', 'disable']:
-                return jsonify({
-                    'success': False,
-                    'message': 'Invalid action. Must be either "enable" or "disable"'
-                }), 400
-
-            success = module_manager.enable_module(module_name) if action == 'enable' else module_manager.disable_module(module_name)
-
-            return jsonify({
-                'success': success,
-                'message': f"Module {module_name} {'enabled' if action == 'enable' else 'disabled'} successfully" if success else "Operation failed"
-            })
-        except Exception as e:
-            logger.error(f"Error toggling module {module_name}: {str(e)}", exc_info=True)
-            return jsonify({'success': False, 'message': str(e)}), 500
+    # Import routes after app initialization
+    import routes
 
     logger.info("Flask application initialization completed")
 
@@ -193,4 +94,4 @@ except Exception as e:
 
 if __name__ == "__main__":
     logger.info("Starting Flask development server...")
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=5001, debug=True)
