@@ -1,6 +1,7 @@
 import logging
 from typing import Dict, Any, Optional
 from datetime import datetime, timedelta
+from flask import current_app
 from .base_module import BaseModule
 from database import get_db
 from models import PriceHistory
@@ -23,14 +24,18 @@ class DashboardModule(BaseModule):
             'price_trends': []
         }
         self.latest_price_data = None
-        self.db = get_db()
 
     async def initialize(self) -> bool:
         """Initialize dashboard module"""
         try:
             logger.info("Initializing dashboard module")
             await self._reset_daily_metrics()
-            self._load_latest_price_data()
+            try:
+                with current_app.app_context():
+                    self._load_latest_price_data()
+            except RuntimeError:
+                logger.warning("No Flask application context available, skipping database operations")
+                self.latest_price_data = {'price': 0, 'timestamp': datetime.now(), 'trend': 'unknown'}
             return True
         except Exception as e:
             logger.error(f"Failed to initialize dashboard: {str(e)}")
@@ -39,6 +44,7 @@ class DashboardModule(BaseModule):
     def _load_latest_price_data(self):
         """Load the latest price data from database"""
         try:
+            db = get_db()
             latest_record = PriceHistory.query.order_by(
                 PriceHistory.timestamp.desc()
             ).first()
@@ -52,8 +58,10 @@ class DashboardModule(BaseModule):
                 logger.info(f"Loaded latest price data: {self.latest_price_data}")
             else:
                 logger.warning("No price history data found")
+                self.latest_price_data = {'price': 0, 'timestamp': datetime.now(), 'trend': 'unknown'}
         except Exception as e:
             logger.error(f"Error loading price data: {str(e)}")
+            self.latest_price_data = {'price': 0, 'timestamp': datetime.now(), 'trend': 'unknown'}
 
     async def process(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Process dashboard data and update metrics"""
@@ -103,7 +111,11 @@ class DashboardModule(BaseModule):
         """Get dashboard data for notifications"""
         try:
             if not self.latest_price_data:
-                self._load_latest_price_data()
+                try:
+                    with current_app.app_context():
+                        self._load_latest_price_data()
+                except RuntimeError:
+                    logger.warning("No Flask application context available")
 
             return {
                 "current_price": self.latest_price_data['price'] if self.latest_price_data else None,

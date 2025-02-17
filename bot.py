@@ -2,7 +2,8 @@ import os
 import logging
 import asyncio
 import nest_asyncio
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from flask import Flask
+from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
 from config import TELEGRAM_BOT_TOKEN
 from modules import (
@@ -10,13 +11,8 @@ from modules import (
     get_price_monitor_module,
     get_pattern_analysis_module,
     get_ml_prediction_module,
-    get_dashboard_module,
-    ModuleError
+    get_dashboard_module
 )
-from datetime import datetime
-from zoneinfo import ZoneInfo
-from database import db, get_db
-from models import UserPreferences
 
 # Configure logging
 logging.basicConfig(
@@ -25,577 +21,63 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Apply nest_asyncio to allow nested event loops
-nest_asyncio.apply()
-
-class EnergyPriceBot:
-    def __init__(self):
-        """Initialize the bot"""
-        self.application = None
-        self.bot_token = TELEGRAM_BOT_TOKEN
-        if not self.bot_token:
-            raise ValueError("TELEGRAM_BOT_TOKEN is not set")
-
-        self.module_manager = ModuleManager()
-        self.module_status = {}
-        self.admin_chat_id = os.environ.get("ADMIN_CHAT_ID")
-        self._is_running = False
-        logger.info("Bot initialization completed")
-
-    async def initialize(self):
-        """Initialize all components"""
-        if self._is_running:
-            logger.warning("Bot is already initialized")
-            return False
-
-        try:
-            # Initialize application
-            self.application = Application.builder().token(self.bot_token).build()
-            self._setup_handlers()
-
-            # Initialize modules
-            await self._setup_modules()
-
-            return True
-        except Exception as e:
-            logger.error(f"Initialization error: {str(e)}")
-            await self._notify_admin(f"Initialization error: {str(e)}")
-            return False
-
-    async def start(self):
-        """Start the bot"""
-        if self._is_running:
-            logger.warning("Bot is already running")
-            return
-
-        try:
-            if not await self.initialize():
-                raise RuntimeError("Failed to initialize bot")
-
-            self._is_running = True
-            await self.application.initialize()
-            await self.application.start()
-            await self.application.run_polling(drop_pending_updates=True)
-        except Exception as e:
-            self._is_running = False
-            logger.error(f"Error starting bot: {str(e)}")
-            raise
-
-    async def stop(self):
-        """Stop the bot"""
-        if not self._is_running:
-            return
-
-        try:
-            if self.application:
-                await self.application.stop()
-                await self.application.shutdown()
-            self._is_running = False
-            logger.info("Bot stopped successfully")
-        except Exception as e:
-            logger.error(f"Error stopping bot: {str(e)}")
-
-    async def _init_telegram(self):
-        """Initialize Telegram application"""
-        try:
-            logger.info("Building application with token...")
-            self.application = Application.builder().token(self.bot_token).build()
-            self.bot = self.application.bot
-            self._setup_handlers()
-            return True
-        except Exception as e:
-            logger.error(f"Failed to initialize Telegram: {str(e)}")
-            return False
-
-    async def _setup_module(self, module_name: str, factory_func):
-        """Set up a single module with error handling"""
-        try:
-            # Create module instance
-            ModuleClass = factory_func()
-            if not ModuleClass:
-                raise ModuleError(f"Failed to get module class for {module_name}")
-
-            module = ModuleClass()
-            if not module:
-                raise ModuleError(f"Failed to create module instance for {module_name}")
-
-            # Initialize the module
-            try:
-                success = await module.initialize()
-                if not success:
-                    raise ModuleError(f"Module {module_name} initialization returned False")
-            except Exception as e:
-                raise ModuleError(f"Failed to initialize module {module_name}: {str(e)}")
-
-            # Register and enable if required
-            self.module_manager.register_module(module)
-            if module_name in ["price_monitor", "dashboard"]:
-                self.module_manager.enable_module(module_name)
-
-            self.module_status[module_name] = True
-            logger.info(f"Module {module_name} initialized successfully")
-            return module
-
-        except Exception as e:
-            self.module_status[module_name] = False
-            error_msg = f"Failed to initialize module {module_name}: {str(e)}"
-            logger.error(error_msg)
-            await self._notify_admin(error_msg)
-            return None
-
-    async def _setup_modules(self):
-        """Set up all modules with independent error handling"""
-        try:
-            logger.info("Setting up modules...")
-
-            # Initialize required price monitor module
-            self.price_module = await self._setup_module(
-                "price_monitor",
-                get_price_monitor_module
-            )
-            if not self.price_module:
-                raise ModuleError("Failed to initialize required price monitor module")
-
-            # Initialize optional modules
-            self.pattern_module = await self._setup_module(
-                "pattern_analysis",
-                get_pattern_analysis_module
-            )
-            self.ml_module = await self._setup_module(
-                "ml_prediction",
-                get_ml_prediction_module
-            )
-            self.dashboard_module = await self._setup_module(
-                "dashboard",
-                get_dashboard_module
-            )
-
-            logger.info("Modules setup completed")
-            await self._notify_admin("Bot modules initialization completed with status:\n" +
-                                   "\n".join(f"{k}: {'✅' if v else '❌'}"
-                                            for k, v in self.module_status.items()))
-
-        except Exception as e:
-            error_msg = f"Critical error in module setup: {str(e)}"
-            logger.error(error_msg)
-            await self._notify_admin(error_msg)
-            raise ModuleError(error_msg)
-
-    async def _notify_admin(self, message: str):
-        """Send notification to admin if admin chat ID is set"""
-        if self.admin_chat_id:
-            try:
-                if hasattr(self, 'bot'):
-                    await self.bot.send_message(
-                        chat_id=self.admin_chat_id,
-                        text=f"🤖 Admin Alert:\n{message}"
-                    )
-            except Exception as e:
-                logger.error(f"Failed to send admin notification: {str(e)}")
-
-    def _setup_handlers(self):
-        """Set up command handlers"""
-        try:
-            logger.info("Setting up command handlers...")
-            self.application.add_handler(CommandHandler("start", self.cmd_start))
-            self.application.add_handler(CommandHandler("help", self.cmd_help))
-            self.application.add_handler(CommandHandler("check", self.cmd_check_price))
-            self.application.add_handler(CommandHandler("status", self.cmd_status))
-            self.application.add_handler(CommandHandler("modules", self.cmd_modules))
-            self.application.add_handler(CommandHandler("enable", self.cmd_enable_module))
-            self.application.add_handler(CommandHandler("disable", self.cmd_disable_module))
-            self.application.add_handler(CommandHandler("preferences", self.cmd_preferences))
-            self.application.add_handler(CommandHandler("threshold", self.cmd_set_threshold))
-            self.application.add_handler(CallbackQueryHandler(self.handle_prediction_feedback))
-            logger.info("Command handlers setup completed")
-        except Exception as e:
-            logger.error(f"Error setting up handlers: {str(e)}")
-            raise
-
-    async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Send a message when the command /start is issued."""
-        try:
-            chat_id = update.effective_chat.id
-            logger.info(f"Received /start command from chat_id: {chat_id}")
-
-            # Get Replit domain for web interface
-            repl_slug = os.environ.get("REPL_SLUG", "")
-            repl_owner = os.environ.get("REPL_OWNER", "")
-            web_url = f"https://{repl_slug}.{repl_owner}.repl.co/module-management"
-
-            welcome_message = (
-                f"👋 Welcome to the Energy Price Monitor Bot!\n\n"
-                f"🔍 Available Commands:\n\n"
-                f"1. Price Monitoring:\n"
-                f"  • /check - Check current energy prices with ML predictions\n"
-                f"  • /status - View monitoring and module status\n\n"
-                f"2. Module Management:\n"
-                f"  • /modules - List all available modules\n"
-                f"  • /enable <module> - Enable an optional module\n"
-                f"  • /disable <module> - Disable an optional module\n"
-                f"  • 🌐 Web Interface: {web_url}\n\n"
-                f"3. Tesla Integration:\n"
-                f"  • /tesla_setup - Configure Tesla integration\n"
-                f"  • /tesla_status - Check Tesla vehicle status\n"
-                f"  • /tesla_disable - Disable Tesla integration\n\n"
-                f"4. User Preferences:\n"
-                f"  • /preferences - View your current settings\n"
-                f"  • /threshold <price> - Set price alert threshold\n\n"
-                f"5. Help & Information:\n"
-                f"  • /help - Show this help message\n"
-                f"  • /start - Initialize or restart the bot\n\n"
-                f"💡 Tip: The price monitor module is required and always enabled.\n"
-                f"Other modules can be enabled/disabled as needed."
-            )
-            await update.message.reply_text(welcome_message)
-            logger.info(f"Sent welcome message to chat_id: {chat_id}")
-        except Exception as e:
-            logger.error(f"Error in /start command: {str(e)}")
-            await update.message.reply_text("Sorry, there was an error processing your command.")
-
-    async def cmd_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Show help information"""
-        await self.cmd_start(update, context)
-
-    async def cmd_modules(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """List all available modules and their status"""
-        try:
-            modules = self.module_manager.get_all_modules()
-            message = "📊 Available Modules:\n\n"
-
-            # First list the required price monitor module
-            for module in modules:
-                if module["name"] == "price_monitor":
-                    status = "✅ Always Enabled (Required)"
-                    message += (
-                        f"1. {module['name'].replace('_', ' ').title()} 🔒\n"
-                        f"   • Status: {status}\n"
-                        f"   • Description: {module['description']}\n\n"
-                    )
-                    break
-
-            # Then list optional modules
-            optional_count = 2
-            for module in modules:
-                if module["name"] != "price_monitor":
-                    status = "✅ Enabled" if module["enabled"] else "❌ Disabled"
-                    message += (
-                        f"{optional_count}. {module['name'].replace('_', ' ').title()} (Optional)\n"
-                        f"   • Status: {status}\n"
-                        f"   • Description: {module['description']}\n\n"
-                    )
-                    optional_count += 1
-
-            message += "Note: The price monitor module is required and cannot be disabled."
-
-            await update.message.reply_text(message)
-        except Exception as e:
-            logger.error(f"Error listing modules: {str(e)}")
-            await update.message.reply_text("Sorry, there was an error listing the modules.")
-
-    async def cmd_enable_module(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Enable a specific module"""
-        try:
-            if not context.args:
-                await update.message.reply_text("Please specify a module name. Use /modules to see available modules.")
-                return
-
-            module_name = context.args[0].lower()
-            if module_name == "price_monitor":
-                await update.message.reply_text("The price monitoring module is required and always enabled.")
-                return
-
-            if self.module_manager.enable_module(module_name):
-                await update.message.reply_text(f"✅ Module '{module_name}' has been enabled.")
-            else:
-                await update.message.reply_text(f"❌ Could not enable module '{module_name}'. Please check the module name.")
-        except Exception as e:
-            logger.error(f"Error enabling module: {str(e)}")
-            await update.message.reply_text("Sorry, there was an error enabling the module.")
-
-    async def cmd_disable_module(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Disable a specific module"""
-        try:
-            if not context.args:
-                await update.message.reply_text("Please specify a module name. Use /modules to see available modules.")
-                return
-
-            module_name = context.args[0].lower()
-            if module_name == "price_monitor":
-                await update.message.reply_text("⚠️ The price monitoring module cannot be disabled as it is required.")
-                return
-
-            if self.module_manager.disable_module(module_name):
-                await update.message.reply_text(f"✅ Module '{module_name}' has been disabled.")
-            else:
-                await update.message.reply_text(f"❌ Could not disable module '{module_name}'. Please check the module name.")
-        except Exception as e:
-            logger.error(f"Error disabling module: {str(e)}")
-            await update.message.reply_text("Sorry, there was an error disabling the module.")
-
-    async def cmd_check_price(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle the /check_price command"""
-        try:
-            chat_id = update.effective_chat.id
-            logger.info(f"Processing /check_price command for chat_id: {chat_id}")
-
-            await update.message.reply_text("🔍 Checking current prices...")
-
-            try:
-                # Get basic price data first
-                logger.debug("Fetching price data from price monitor module")
-                price_data = await self.price_module.get_notification_data()
-                if not price_data:
-                    error_msg = "❌ Unable to fetch current prices. Please try again later."
-                    logger.error("Price monitor returned no data")
-                    await update.message.reply_text(error_msg)
-                    await self._notify_admin(
-                        f"Price monitor failed to return data for chat_id: {chat_id}"
-                    )
-                    return
-
-                # Format basic message with price data
-                message = "📊 Energy Price Update\n\n"
-                message += f"Current Price: {price_data['current_price']}¢\n"
-                message += f"Provider: {price_data.get('provider', 'Unknown')}\n"
-                message += f"Last Updated: {price_data['time']}\n"
-                message += f"Status: {price_data.get('status', 'unknown')}\n\n"
-
-                # Try to get additional data from other modules
-                try:
-                    logger.debug("Fetching additional module data")
-                    notification_data = await self.module_manager.get_notification_data()
-
-                    # Add pattern analysis if available
-                    if 'pattern_analysis' in notification_data:
-                        pattern_data = notification_data['pattern_analysis']
-                        if pattern_data:
-                            message += "📈 Pattern Analysis:\n"
-                            message += f"• Trend: {pattern_data.get('trend', 'Unknown')}\n"
-                            message += f"• Volatility: {pattern_data.get('volatility', 'N/A')}\n\n"
-
-                    # Add ML predictions if available
-                    if 'ml_prediction' in notification_data:
-                        ml_data = notification_data['ml_prediction']
-                        if ml_data:
-                            message += "🔮 Price Prediction:\n"
-                            message += f"• Next Hour: {ml_data.get('predicted_price', 'N/A')}¢\n"
-                            message += f"• Confidence: {ml_data.get('confidence', 'N/A')}%\n\n"
-
-                except Exception as module_error:
-                    logger.error(f"Error processing optional modules: {str(module_error)}")
-                    message += "\n⚠️ Some features are temporarily unavailable."
-                    await self._notify_admin(
-                        f"Optional modules failed for chat_id {chat_id}: {str(module_error)}"
-                    )
-
-                # Add timestamp
-                message += f"\n⏰ Last Updated: {datetime.now(ZoneInfo('America/Chicago')).strftime('%Y-%m-%d %I:%M %p %Z')}"
-
-                await update.message.reply_text(message)
-                logger.info(f"Successfully sent price update to chat_id: {chat_id}")
-
-            except ModuleError as me:
-                error_msg = f"❌ {str(me)}"
-                logger.error(error_msg)
-                await self._notify_admin(
-                    f"Critical module error in price check: {str(me)}"
-                )
-                await update.message.reply_text(error_msg)
-
-        except Exception as e:
-            logger.error(f"Critical error in check_price command: {str(e)}")
-            await update.message.reply_text(
-                "❌ Sorry, there was an unexpected error. Please try again later."
-            )
-            if self.admin_chat_id:
-                await self._notify_admin(
-                    f"Critical bot error in check_price: {str(e)}"
-                )
-
-    async def _send_admin_notification(self, chat_id: str, message: str):
-        """Send notification to admin"""
-        try:
-            if not chat_id:
-                logger.warning("Admin chat ID not set, skipping notification")
-                return
-            await self.bot.send_message(
-                chat_id=chat_id,
-                text=f"🤖 Bot Admin Alert:\n{message}"
-            )
-        except Exception as e:
-            logger.error(f"Failed to send admin notification: {str(e)}")
-
-    def _format_price_message(self, results: dict, notification_data: dict) -> str:
-        """Format price message with data from enabled modules"""
-        message = "📊 Energy Price Update\n\n"
-
-        # Price monitoring data (always present)
-        price_data = notification_data.get("price_monitor", {})
-        if price_data:
-            message += f"Current Price: {price_data.get('current_price')}¢\n"
-            message += f"Five-min Price: {price_data.get('five_min_price')}¢\n"
-            message += f"Trend: {price_data.get('trend', 'unknown').capitalize()}\n\n"
-        else:
-            message += "⚠️ Basic price data unavailable\n\n"
-
-        # Pattern analysis data (if enabled and available)
-        pattern_data = notification_data.get("pattern_analysis")
-        if pattern_data:
-            message += "📈 Pattern Analysis:\n"
-            message += f"• Current Trend: {pattern_data.get('current_trend', 'unknown').capitalize()}\n"
-            message += f"• Volatility: {pattern_data.get('volatility', 0):.2f}\n\n"
-
-        # ML predictions (if enabled and available)
-        ml_data = notification_data.get("ml_prediction")
-        if ml_data and ml_data.get("predicted_price"):
-            message += "🔮 Price Prediction:\n"
-            message += f"• Next Hour: {ml_data.get('predicted_price')}¢\n"
-            message += f"• Confidence: {ml_data.get('confidence')}%\n\n"
-
-        # Add timestamp
-        cst_time = datetime.now(ZoneInfo("America/Chicago"))
-        message += f"\n⏰ Last Updated: {cst_time.strftime('%Y-%m-%d %I:%M %p %Z')}"
-
-        if not any(notification_data.values()):
-            message += "\n\n⚠️ Some features are currently unavailable."
-
-        return message
-
-    async def cmd_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Check the monitoring status"""
-        enabled_modules = self.module_manager.get_enabled_modules()
-        status_message = (
-            "📊 System Status\n\n"
-            f"Active Modules: {len(enabled_modules)}\n"
-            "Enabled Modules:\n"
-        )
-
-        for module_name in enabled_modules:
-            status_message += f"• {module_name}\n"
-
-        await update.message.reply_text(status_message)
-
-    async def handle_prediction_feedback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle feedback on price predictions"""
-        query = update.callback_query
-        await query.answer()
-
-        try:
-            feedback_type = query.data.split('_')[1]
-            accuracy = 1.0 if feedback_type == 'accurate' else 0.0
-
-            if self.ml_module and self.ml_module.is_enabled():
-                # Update ML module with feedback
-                await self.ml_module.process({
-                    "command": "update_feedback",
-                    "accuracy": accuracy
-                })
-
-            feedback_msg = "✅ Thank you for your feedback!" if accuracy == 1.0 else "👍 Thanks for helping us improve!"
-
-            await query.edit_message_reply_markup(reply_markup=None)
-            await context.bot.send_message(
-                chat_id=update.effective_chat.id,
-                text=feedback_msg
-            )
-
-        except Exception as e:
-            logger.error(f"Error processing prediction feedback: {str(e)}")
-            await context.bot.send_message(
-                chat_id=update.effective_chat.id,
-                text="❌ Sorry, there was an error processing your feedback."
-            )
-
-    async def cmd_preferences(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Show user preferences"""
-        try:
-            chat_id = update.effective_chat.id
-            logger.info(f"Showing preferences for chat_id: {chat_id}")
-
-            with app.app_context():
-                prefs = UserPreferences.get_user_preferences(str(chat_id))
-                if prefs:
-                    message = (
-                        "🔧 Your Current Preferences:\n\n"
-                        f"• Price Threshold: {prefs.price_threshold}¢\n"
-                        f"• Alert Frequency: {prefs.alert_frequency}\n"
-                        f"• Active: {'Yes' if prefs.is_active else 'No'}\n"
-                    )
-                    if prefs.start_time and prefs.end_time:
-                        message += f"• Alert Window: {prefs.start_time.strftime('%I:%M %p')} - {prefs.end_time.strftime('%I:%M %p')}"
-                else:
-                    message = (
-                        "❌ No preferences found.\n"
-                        "Use /threshold to set your price alert threshold."
-                    )
-
-            await update.message.reply_text(message)
-            logger.info(f"Sent preferences to chat_id: {chat_id}")
-
-        except Exception as e:
-            logger.error(f"Error showing preferences: {str(e)}")
-            await update.message.reply_text("Sorry, there was an error fetching your preferences.")
-
-    async def cmd_set_threshold(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Set price alert threshold"""
-        try:
-            chat_id = update.effective_chat.id
-            logger.info(f"Setting threshold for chat_id: {chat_id}")
-
-            # Check if a threshold value was provided
-            if not context.args:
-                await update.message.reply_text(
-                    "Please provide a threshold value in cents (e.g., /threshold 3.5)\n"
-                    "This is the price above which you'll receive alerts."
-                )
-                return
-
-            try:
-                threshold = float(context.args[0])
-                if threshold <= 0:
-                    await update.message.reply_text("❌ Threshold must be a positive number.")
-                    return
-
-                with app.app_context():
-                    prefs = UserPreferences.create_or_update(str(chat_id), price_threshold=threshold)
-
-                await update.message.reply_text(
-                    f"✅ Price threshold set to {threshold}¢\n"
-                    "You'll receive alerts when prices exceed this threshold."
-                )
-                logger.info(f"Set threshold to {threshold} for chat_id: {chat_id}")
-
-            except ValueError:
-                await update.message.reply_text(
-                    "❌ Please enter a valid number (e.g., 3.5)"
-                )
-
-        except Exception as e:
-            logger.error(f"Error setting threshold: {str(e)}")
-            await update.message.reply_text("Sorry, there was an error setting your threshold.")
-
+def init_flask_app():
+    """Initialize Flask application"""
+    app = Flask(__name__)
+    app.config['SECRET_KEY'] = os.environ.get('SESSION_SECRET', 'dev-secret-key')
+    return app
 
 async def run_bot():
     """Run the bot with proper async handling"""
-    bot = EnergyPriceBot()
     try:
-        await bot.start()
+        # Initialize application
+        application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+
+        # Set up basic command handlers
+        application.add_handler(CommandHandler("start", lambda u, c: u.message.reply_text("Bot is starting...")))
+
+        # Start the bot
+        await application.initialize()
+        await application.start()
+        await application.run_polling()
+
     except Exception as e:
         logger.error(f"Error running bot: {str(e)}", exc_info=True)
         raise
     finally:
-        if bot:
-            await bot.stop()
+        if 'application' in locals():
+            await application.stop()
 
 def main():
     """Start the bot with proper error handling"""
     try:
-        asyncio.run(run_bot())
+        # Use nest_asyncio to allow nested event loops
+        nest_asyncio.apply()
+
+        # Create new event loop
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        # Initialize Flask app
+        app = init_flask_app()
+
+        # Run the Flask app in a separate thread
+        import threading
+        flask_thread = threading.Thread(target=lambda: app.run(host='0.0.0.0', port=8080, debug=False))
+        flask_thread.daemon = True
+        flask_thread.start()
+
+        # Run the bot
+        loop.run_until_complete(run_bot())
     except KeyboardInterrupt:
         logger.info("Bot stopped by user")
     except Exception as e:
         logger.critical(f"Bot failed to start: {str(e)}", exc_info=True)
+    finally:
+        try:
+            loop.close()
+        except Exception as e:
+            logger.error(f"Error closing event loop: {str(e)}")
 
 if __name__ == '__main__':
     main()
