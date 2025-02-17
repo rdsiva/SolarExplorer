@@ -148,3 +148,40 @@ class PriceMonitorModule(BaseModule):
         except Exception as e:
             logger.error(f"Error getting notification data: {str(e)}")
             return None
+
+    async def get_price_data(self) -> Optional[Dict[str, Any]]:
+        """Get basic price data including current price and average"""
+        try:
+            logger.info("Getting basic price data")
+            if not await self._update_price_data():
+                logger.error("Failed to update price data")
+                return None
+
+            if self.last_price is None:
+                logger.error("No price data available")
+                return None
+
+            # Get hourly average
+            try:
+                response = requests.get(self.api_endpoints["hourly"])
+                if response.status_code == 200:
+                    data = response.json()
+                    average_price = float(data[0].get('price', 0)) if data else None
+                else:
+                    average_price = None
+            except Exception as e:
+                logger.error(f"Error getting average price: {str(e)}")
+                average_price = None
+
+            result = {
+                'current_price': round(self.last_price, 2),
+                'average_price': round(average_price, 2) if average_price is not None else "N/A",
+                'timestamp': self.last_update.isoformat() if self.last_update else None
+            }
+
+            logger.info(f"Successfully prepared basic price data: {result}")
+            return result
+
+        except Exception as e:
+            logger.error(f"Error getting basic price data: {str(e)}")
+            return None
