@@ -122,7 +122,7 @@ task = "packager.installForAll"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "python minimal_bot.py"
+args = "python bot.py"
 
 [[ports]]
 localPort = 5000

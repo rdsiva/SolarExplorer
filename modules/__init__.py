@@ -4,6 +4,7 @@ from .price_monitor_module import PriceMonitorModule
 from .pattern_analysis_module import PatternAnalysisModule
 from .ml_prediction_module import MLPredictionModule
 from .dashboard_module import DashboardModule
+from .errors import ModuleError
 
 __all__ = [
     'BaseModule', 
@@ -11,5 +12,6 @@ __all__ = [
     'PriceMonitorModule',
     'PatternAnalysisModule',
     'MLPredictionModule',
-    'DashboardModule'
+    'DashboardModule',
+    'ModuleError'
 ]

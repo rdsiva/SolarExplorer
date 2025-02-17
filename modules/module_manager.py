@@ -13,6 +13,7 @@ class ModuleManager:
         self.modules: Dict[str, BaseModule] = {}
         self.module_errors: Dict[str, List[Dict[str, Any]]] = {}
         self.admin_chat_id = os.environ.get('ADMIN_CHAT_ID')
+        self._notification_callback = None
 
     def register_module(self, module: BaseModule) -> bool:
         """Register a new module"""
@@ -95,9 +96,11 @@ class ModuleManager:
         for name, module in self.modules.items():
             if module.is_enabled():
                 try:
+                    logger.info(f"Processing data with module: {name}")
                     results[name] = await module.process(data)
                     # Clear any previous errors if successful
                     self._clear_module_errors(name)
+                    logger.info(f"Successfully processed data with module: {name}")
                 except Exception as e:
                     error_msg = f"Error processing in module {name}: {str(e)}"
                     logger.error(error_msg)
@@ -106,10 +109,12 @@ class ModuleManager:
 
                     # For core price_monitor module, raise the error
                     if name == "price_monitor":
+                        logger.error("Critical error in price_monitor module")
                         raise
 
                     # For other modules, continue with partial results
                     results[name] = {"error": str(e)}
+                    logger.warning(f"Continuing execution without module {name}")
 
         return results
 
@@ -120,9 +125,11 @@ class ModuleManager:
         for name, module in self.modules.items():
             if module.is_enabled():
                 try:
+                    logger.info(f"Getting notification data from module: {name}")
                     module_data = await module.get_notification_data()
                     if module_data:
                         notification_data[name] = module_data
+                        logger.info(f"Successfully got notification data from module: {name}")
                 except Exception as e:
                     error_msg = f"Error getting notification data from {name}: {str(e)}"
                     logger.error(error_msg)
@@ -130,6 +137,7 @@ class ModuleManager:
                     await self._notify_admin(f"⚠️ Module {name} notification failed: {str(e)}")
 
                     # Skip failed module's data without breaking functionality
+                    logger.warning(f"Skipping notification data from module {name}")
                     continue
 
         return notification_data
@@ -158,12 +166,13 @@ class ModuleManager:
             logger.warning("Admin chat ID not configured, skipping notification")
             return
 
-        try:
-            # Import here to avoid circular imports
-            from bot import bot
-            await bot.send_message(
-                chat_id=self.admin_chat_id,
-                text=f"🤖 Bot Admin Alert:\n{message}"
-            )
-        except Exception as e:
-            logger.error(f"Failed to send admin notification: {str(e)}")
+        if self._notification_callback:
+            try:
+                logger.info(f"Sending admin notification: {message}")
+                await self._notification_callback(self.admin_chat_id, message)
+            except Exception as e:
+                logger.error(f"Failed to send admin notification: {str(e)}")
+
+    def set_notification_callback(self, callback):
+        """Set callback for admin notifications"""
+        self._notification_callback = callback

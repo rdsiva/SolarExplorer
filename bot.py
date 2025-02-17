@@ -1,14 +1,13 @@
 import os
 import logging
 import requests
+import asyncio
 from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
 from config import TELEGRAM_BOT_TOKEN, HEALTH_CHECK_URL, MIN_RATE
-from modules import ModuleManager, PriceMonitorModule, PatternAnalysisModule, MLPredictionModule, ModuleError
+from modules import ModuleManager, PriceMonitorModule, PatternAnalysisModule, MLPredictionModule, DashboardModule, ModuleError
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from app import app
-from flask import render_template, request, jsonify
 
 # Configure logging
 logging.basicConfig(
@@ -20,32 +19,77 @@ logger = logging.getLogger(__name__)
 class EnergyPriceBot:
     def __init__(self):
         """Initialize the bot"""
-        self.bot_token = TELEGRAM_BOT_TOKEN
-        if not self.bot_token:
-            raise ValueError("TELEGRAM_BOT_TOKEN is not set")
+        try:
+            logger.info("Initializing EnergyPriceBot...")
+            self.bot_token = TELEGRAM_BOT_TOKEN
+            if not self.bot_token:
+                logger.error("TELEGRAM_BOT_TOKEN is not set")
+                raise ValueError("TELEGRAM_BOT_TOKEN is not set")
 
-        logger.info("Initializing bot with token: %s...", self.bot_token[:8])
-        self.application = Application.builder().token(self.bot_token).build()
-        self.bot = self.application.bot
+            logger.info("Building application with token...")
+            self.application = Application.builder().token(self.bot_token).build()
+            self.bot = self.application.bot
 
-        # Initialize module manager and register modules
-        self.module_manager = ModuleManager()
-        self._setup_modules()
+            # Initialize module manager and register modules
+            logger.info("Initializing ModuleManager...")
+            self.module_manager = ModuleManager()
+            self._setup_modules()
+
+            # Set up admin notification callback
+            logger.info("Setting up admin notification callback...")
+            self.module_manager.set_notification_callback(self._send_admin_notification)
+
+            logger.info("Bot initialization completed successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize bot: {str(e)}")
+            raise
+
+    async def _send_admin_notification(self, chat_id: str, message: str):
+        """Send notification to admin"""
+        try:
+            if not chat_id:
+                logger.warning("Admin chat ID not set, skipping notification")
+                return
+            await self.bot.send_message(
+                chat_id=chat_id,
+                text=f"🤖 Bot Admin Alert:\n{message}"
+            )
+        except Exception as e:
+            logger.error(f"Failed to send admin notification: {str(e)}")
 
     def _setup_modules(self):
         """Set up and register all available modules"""
-        # Initialize modules
-        self.price_module = PriceMonitorModule()  # Required module
-        self.pattern_module = PatternAnalysisModule()  # Optional
-        self.ml_module = MLPredictionModule()  # Optional
+        try:
+            logger.info("Setting up modules...")
+            # Initialize modules
+            self.price_module = PriceMonitorModule()  # Required module
+            logger.info("Price monitor module initialized")
 
-        # Register modules
-        self.module_manager.register_module(self.price_module)
-        self.module_manager.register_module(self.pattern_module)
-        self.module_manager.register_module(self.ml_module)
+            self.pattern_module = PatternAnalysisModule()  # Optional
+            logger.info("Pattern analysis module initialized")
 
-        # Enable price monitoring by default (required)
-        self.module_manager.enable_module("price_monitor")
+            self.ml_module = MLPredictionModule()  # Optional
+            logger.info("ML prediction module initialized")
+
+            self.dashboard_module = DashboardModule()  # Optional
+            logger.info("Dashboard module initialized")
+
+            # Register modules
+            logger.info("Registering modules with manager...")
+            self.module_manager.register_module(self.price_module)
+            self.module_manager.register_module(self.pattern_module)
+            self.module_manager.register_module(self.ml_module)
+            self.module_manager.register_module(self.dashboard_module)
+
+            # Enable price monitoring by default (required)
+            logger.info("Enabling required modules...")
+            self.module_manager.enable_module("price_monitor")
+            self.module_manager.enable_module("dashboard")  # Enable dashboard by default
+
+            logger.info("Modules setup completed successfully")
+        except Exception as e:
+            logger.error(f"Error setting up modules: {str(e)}")
+            raise
 
     def _setup_handlers(self):
         """Set up command handlers for the bot"""
@@ -66,10 +110,18 @@ class EnergyPriceBot:
 
     async def start(self):
         """Start the bot"""
-        self._setup_handlers()
-        await self.application.initialize()
-        await self.application.start()
-        await self.application.run_polling(drop_pending_updates=True)
+        try:
+            logger.info("Starting bot...")
+            self._setup_handlers()
+            logger.info("Initializing application...")
+            await self.application.initialize()
+            logger.info("Starting application...")
+            await self.application.start()
+            logger.info("Starting polling...")
+            await self.application.run_polling(drop_pending_updates=True)
+        except Exception as e:
+            logger.error(f"Error starting bot: {str(e)}")
+            raise
 
     async def stop(self):
         """Stop the bot"""
@@ -136,8 +188,6 @@ class EnergyPriceBot:
                     )
                     optional_count += 1
 
-            message += "\n🌐 Manage modules at:\n"
-            message += f"https://{app.config['SERVER_NAME']}/module-management\n\n"
             message += "Note: The price monitor module is required and cannot be disabled."
 
             await update.message.reply_text(message)
@@ -186,7 +236,7 @@ class EnergyPriceBot:
             await update.message.reply_text("Sorry, there was an error disabling the module.")
 
     async def cmd_check_price(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Check current prices with data from enabled modules"""
+        """Handle the /check_price command"""
         try:
             chat_id = update.effective_chat.id
             logger.info(f"Processing /check_price command for chat_id: {chat_id}")
@@ -194,66 +244,80 @@ class EnergyPriceBot:
             await update.message.reply_text("🔍 Checking current prices...")
 
             try:
-                # Process data through enabled modules
-                results = await self.module_manager.process_with_enabled_modules({})
-
-                # Get notification data from enabled modules
-                notification_data = await self.module_manager.get_notification_data()
-
-                # Format and send the message
-                message = self._format_price_message(results, notification_data)
-
-                # Send the message with or without feedback buttons
-                if "ml_prediction" in notification_data and notification_data["ml_prediction"].get("predicted_price"):
-                    keyboard = [
-                        [
-                            InlineKeyboardButton("✅ Accurate", callback_data="feedback_accurate"),
-                            InlineKeyboardButton("❌ Inaccurate", callback_data="feedback_inaccurate")
-                        ]
-                    ]
-                    reply_markup = InlineKeyboardMarkup(keyboard)
-                    await self.bot.send_message(
-                        chat_id=chat_id,
-                        text=message,
-                        reply_markup=reply_markup,
-                        parse_mode='HTML'
-                    )
-                else:
-                    await self.bot.send_message(
-                        chat_id=chat_id,
-                        text=message,
-                        parse_mode='HTML'
-                    )
-
-            except Exception as e:
-                # If the core price_monitor module fails
-                if isinstance(e, ModuleError) and e.module_name == "price_monitor":
+                # Get basic price data first
+                logger.debug("Fetching price data from price monitor module")
+                price_data = await self.price_module.get_notification_data()
+                if not price_data:
                     error_msg = "❌ Unable to fetch current prices. Please try again later."
-                    logger.error(f"Core price monitoring failed: {str(e)}")
-                else:
-                    # If optional modules fail, still show basic price info
-                    try:
-                        basic_price_data = await self.price_module.get_notification_data()
-                        if basic_price_data:
-                            message = "📊 Basic Price Information\n\n"
-                            message += f"Current Price: {basic_price_data.get('current_price')}¢\n"
-                            message += "\n⚠️ Some features are temporarily unavailable."
-                            await self.bot.send_message(chat_id=chat_id, text=message)
-                            return
-                    except Exception as e:
-                        error_msg = "❌ Error fetching price data. Please try again later."
+                    logger.error("Price monitor returned no data")
+                    await update.message.reply_text(error_msg)
+                    await self._send_admin_notification(
+                        self.module_manager.admin_chat_id,
+                        f"Price monitor failed to return data for chat_id: {chat_id}"
+                    )
+                    return
 
+                # Format basic message with price data
+                message = "📊 Energy Price Update\n\n"
+                message += f"Current Price: {price_data['current_price']}¢\n"
+                message += f"Provider: {price_data.get('provider', 'Unknown')}\n"
+                message += f"Last Updated: {price_data['time']}\n"
+                message += f"Status: {price_data.get('status', 'unknown')}\n\n"
+
+                # Try to get additional data from other modules
+                try:
+                    logger.debug("Fetching additional module data")
+                    notification_data = await self.module_manager.get_notification_data()
+
+                    # Add pattern analysis if available
+                    if 'pattern_analysis' in notification_data:
+                        pattern_data = notification_data['pattern_analysis']
+                        if pattern_data:
+                            message += "📈 Pattern Analysis:\n"
+                            message += f"• Trend: {pattern_data.get('trend', 'Unknown')}\n"
+                            message += f"• Volatility: {pattern_data.get('volatility', 'N/A')}\n\n"
+
+                    # Add ML predictions if available
+                    if 'ml_prediction' in notification_data:
+                        ml_data = notification_data['ml_prediction']
+                        if ml_data:
+                            message += "🔮 Price Prediction:\n"
+                            message += f"• Next Hour: {ml_data.get('predicted_price', 'N/A')}¢\n"
+                            message += f"• Confidence: {ml_data.get('confidence', 'N/A')}%\n\n"
+
+                except Exception as module_error:
+                    logger.error(f"Error processing optional modules: {str(module_error)}")
+                    message += "\n⚠️ Some features are temporarily unavailable."
+                    await self._send_admin_notification(
+                        self.module_manager.admin_chat_id,
+                        f"Optional modules failed for chat_id {chat_id}: {str(module_error)}"
+                    )
+
+                # Add timestamp
+                message += f"\n⏰ Last Updated: {datetime.now(ZoneInfo('America/Chicago')).strftime('%Y-%m-%d %I:%M %p %Z')}"
+
+                await update.message.reply_text(message)
+                logger.info(f"Successfully sent price update to chat_id: {chat_id}")
+
+            except ModuleError as me:
+                error_msg = f"❌ {str(me)}"
+                logger.error(error_msg)
+                await self._send_admin_notification(
+                    self.module_manager.admin_chat_id,
+                    f"Critical module error in price check: {str(me)}"
+                )
                 await update.message.reply_text(error_msg)
-                return
-
-            logger.info(f"Price check completed for chat_id: {chat_id}")
 
         except Exception as e:
-            error_msg = f"❌ Unexpected error: {str(e)}"
-            logger.error(error_msg)
+            logger.error(f"Critical error in check_price command: {str(e)}")
             await update.message.reply_text(
-                "Sorry, there was an unexpected error. Please try again later."
+                "❌ Sorry, there was an unexpected error. Please try again later."
             )
+            if self.module_manager.admin_chat_id:
+                await self._send_admin_notification(
+                    self.module_manager.admin_chat_id,
+                    f"Critical bot error in check_price: {str(e)}"
+                )
 
     def _format_price_message(self, results: dict, notification_data: dict) -> str:
         """Format price message with data from enabled modules"""
@@ -344,38 +408,16 @@ class EnergyPriceBot:
         except:
             return False
 
-
-@app.route('/module-management', methods=['GET'])
-def module_management_view():
-    """View for module management web interface"""
-    modules = bot.module_manager.get_all_modules()
-    return render_template('module_manager.html', modules=modules)
-
-@app.route('/api/modules/<module_name>', methods=['POST'])
-def toggle_module(module_name):
-    """API endpoint to toggle module state"""
-    try:
-        data = request.get_json()
-        action = data.get('action')
-
-        if action == 'enable':
-            success = bot.module_manager.enable_module(module_name)
-        elif action == 'disable':
-            success = bot.module_manager.disable_module(module_name)
-        else:
-            return jsonify({'success': False, 'message': 'Invalid action'}), 400
-
-        return jsonify({
-            'success': success,
-            'message': f'Module {module_name} {"enabled" if action == "enable" else "disabled"} successfully'
-        })
-    except Exception as e:
-        return jsonify({'success': False, 'message': str(e)}), 500
-
 if __name__ == '__main__':
-    bot = EnergyPriceBot()
     try:
-        import asyncio
+        # Ensure we only have one bot instance
+        logger.info("Starting new bot instance...")
+        bot = EnergyPriceBot()
+
+        # Initialize modules before starting the bot
+        asyncio.run(bot.module_manager.initialize_modules())
+
+        # Start the bot
         asyncio.run(bot.start())
     except KeyboardInterrupt:
         logger.info("Bot stopped by user")
