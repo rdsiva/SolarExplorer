@@ -1,4 +1,4 @@
-from flask import jsonify, render_template, request, redirect
+from flask import jsonify, render_template, request, redirect, url_for
 from datetime import datetime, timedelta
 import numpy as np
 from app import app
@@ -215,27 +215,47 @@ def tesla_oauth_callback():
         state = request.args.get('state')
         chat_id = request.args.get('chat_id')
 
+        logger.info(f"Received OAuth callback with parameters: code={bool(code)}, state={bool(state)}, chat_id={chat_id}")
+
         if not all([code, state, chat_id]):
-            logger.error("Missing required OAuth parameters")
+            missing_params = []
+            if not code:
+                missing_params.append('code')
+            if not state:
+                missing_params.append('state')
+            if not chat_id:
+                missing_params.append('chat_id')
+
+            error_msg = f"Missing required OAuth parameters: {', '.join(missing_params)}"
+            logger.error(error_msg)
             return render_template('error.html', 
-                message="Invalid OAuth callback parameters"), 400
+                message=error_msg), 400
 
         # Verify state matches stored state
         prefs = TeslaPreferences.get_preferences(chat_id)
         if not prefs or prefs.oauth_state != state:
-            logger.error(f"OAuth state mismatch for chat_id: {chat_id}")
+            error_msg = f"OAuth state mismatch for chat_id: {chat_id}"
+            logger.error(error_msg)
+            if not prefs:
+                logger.error("No Tesla preferences found for this chat_id")
+            else:
+                logger.error(f"Stored state: {prefs.oauth_state}, Received state: {state}")
             return render_template('error.html', 
                 message="Invalid OAuth state parameter"), 400
 
         # Exchange code for tokens
         api = TeslaAPI()
+        logger.info(f"Exchanging authorization code for tokens for chat_id: {chat_id}")
         result = api.exchange_code_for_token(code, state)
+
         if not result['success']:
-            logger.error(f"Token exchange failed: {result.get('error')}")
+            error_msg = f"Token exchange failed: {result.get('error')}"
+            logger.error(error_msg)
             return render_template('error.html', 
                 message="Failed to complete authentication"), 400
 
         # Update Tesla preferences with tokens
+        logger.info(f"Updating Tesla preferences with new tokens for chat_id: {chat_id}")
         prefs.update_auth_tokens(
             access_token=result['access_token'],
             refresh_token=result['refresh_token']
@@ -245,10 +265,11 @@ def tesla_oauth_callback():
         repl_owner = os.environ.get("REPL_OWNER", "")
         repl_slug = os.environ.get("REPL_SLUG", "")
         success_url = f"https://{repl_slug}.{repl_owner}.repl.co/tesla/success"
+        logger.info(f"OAuth flow completed successfully for chat_id: {chat_id}")
         return redirect(success_url)
 
     except Exception as e:
-        logger.error(f"Error in Tesla OAuth callback: {str(e)}")
+        logger.error(f"Error in Tesla OAuth callback: {str(e)}", exc_info=True)
         return render_template('error.html', 
             message="An error occurred during authentication"), 500
 
@@ -257,3 +278,13 @@ def tesla_success():
     """Display Tesla authentication success page"""
     return render_template('tesla_success.html', 
         message="Tesla authentication successful! You can now close this window and return to the Telegram bot.")
+
+@app.route('/tesla/test-callback')
+def test_tesla_callback():
+    """Test endpoint to verify Tesla OAuth callback is properly registered"""
+    logger.info("Tesla callback test endpoint accessed")
+    return jsonify({
+        'status': 'success',
+        'message': 'Tesla OAuth callback test endpoint is accessible',
+        'callback_url': url_for('tesla_oauth_callback', _external=True)
+    })
