@@ -44,7 +44,6 @@ task = "packager.installForAll"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "python bot.py"
-waitForPort = 80
 
 [[workflows.workflow]]
 name = "Telegram Price Monitor"
