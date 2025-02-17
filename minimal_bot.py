@@ -102,8 +102,9 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Operation cancelled.")
     return ConversationHandler.END
 
+@app.route('/')
 async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Check current prices with ML predictions"""
+    """Check current prices with ML predictions and pattern analysis"""
     try:
         chat_id = update.effective_chat.id
         await update.message.reply_text("🔍 Checking current prices with ML analysis...")
@@ -127,7 +128,7 @@ async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
             prefs = UserPreferences.get_user_preferences(str(chat_id))
             threshold = prefs.price_threshold if prefs else 3.0
 
-        # Generate ML-based prediction
+        # Generate ML-based prediction with pattern analysis
         prediction = await price_predictor.predict(current_price)
 
         if not prediction:
@@ -137,6 +138,7 @@ async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
         predicted_price = prediction['predicted_price']
         confidence = prediction['confidence']
         prediction_range = prediction['range']
+        patterns = prediction.get('patterns', {})
 
         # Store prediction in database
         price_record = None
@@ -155,11 +157,26 @@ async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.error(f"Database error while storing prediction: {str(db_error)}")
                 db.session.rollback()
 
-        # Format message with ML predictions
+        # Format message with ML predictions and patterns
         message = "📊 Current Energy Prices:\n\n"
         message += f"5-min price: {five_min_data.get('price', 'N/A')}¢\n"
         message += f"Hourly price: {current_price:.2f}¢\n"
         message += f"Your Alert Threshold: {threshold}¢\n"
+
+        # Add pattern analysis section
+        message += "\n🔍 Pattern Analysis:\n"
+        if patterns:
+            pattern_emojis = {
+                'spike': '⚡',
+                'dip': '📉',
+                'trend': '📈',
+                'cycle': '🔄'
+            }
+            for pattern, detected in patterns.items():
+                if detected:
+                    message += f"{pattern_emojis.get(pattern, '•')} {pattern.title()} pattern detected\n"
+        else:
+            message += "No significant patterns detected\n"
 
         # Add smart price alert based on ML prediction
         if predicted_price > threshold:

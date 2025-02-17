@@ -12,14 +12,15 @@ class PricePredictionAgent(BaseAgent):
     def __init__(self):
         super().__init__("PricePrediction")
         self.min_history_points = 6  # Minimum data points needed for prediction
+        self.provider = "ComEd"  # Default provider
 
     async def process(self, message: Dict[str, Any]) -> Dict[str, Any]:
         if message.get("command") == "predict_prices":
             try:
                 # Get historical data from database using Flask application context
                 with app.app_context():
-                    historical_records = PriceHistory.get_recent_history(hours=24)
-                    feedback_records = PriceHistory.get_recent_predictions_with_accuracy()
+                    historical_records = PriceHistory.get_recent_history(hours=24, provider=self.provider)
+                    feedback_records = PriceHistory.get_recent_predictions_with_accuracy(provider=self.provider)
 
                 if not historical_records or len(historical_records) < self.min_history_points:
                     logger.warning(f"Limited historical data. Using basic prediction with {len(historical_records) if historical_records else 0} points.")
@@ -37,7 +38,8 @@ class PricePredictionAgent(BaseAgent):
                         PriceHistory.add_price_data(
                             hourly_price=current_price,
                             predicted_price=predictions["short_term_prediction"],
-                            prediction_confidence=predictions["confidence"]
+                            prediction_confidence=predictions["confidence"],
+                            provider=self.provider
                         )
 
                 return {
