@@ -1,13 +1,12 @@
 import os
 import logging
+import requests  # Add this import
 from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
-import requests
-from datetime import datetime
 from config import TELEGRAM_BOT_TOKEN, HEALTH_CHECK_URL, MIN_RATE
-from price_monitor import PriceMonitor
+from modules import ModuleManager, PriceMonitorModule, PatternAnalysisModule, MLPredictionModule
+from datetime import datetime
 from zoneinfo import ZoneInfo
-from models import PriceHistory
 from app import app
 
 # Configure logging
@@ -28,6 +27,25 @@ class EnergyPriceBot:
         self.application = Application.builder().token(self.bot_token).build()
         self.bot = self.application.bot
 
+        # Initialize module manager and register modules
+        self.module_manager = ModuleManager()
+        self._setup_modules()
+
+    def _setup_modules(self):
+        """Set up and register all available modules"""
+        # Initialize modules
+        self.price_module = PriceMonitorModule()  # Required module
+        self.pattern_module = PatternAnalysisModule()  # Optional
+        self.ml_module = MLPredictionModule()  # Optional
+
+        # Register modules
+        self.module_manager.register_module(self.price_module)
+        self.module_manager.register_module(self.pattern_module)
+        self.module_manager.register_module(self.ml_module)
+
+        # Enable price monitoring by default (required)
+        self.module_manager.enable_module("price_monitor")
+
     def _setup_handlers(self):
         """Set up command handlers for the bot"""
         try:
@@ -36,6 +54,9 @@ class EnergyPriceBot:
             self.application.add_handler(CommandHandler("help", self.cmd_help))
             self.application.add_handler(CommandHandler("check_price", self.cmd_check_price))
             self.application.add_handler(CommandHandler("status", self.cmd_status))
+            self.application.add_handler(CommandHandler("modules", self.cmd_list_modules))
+            self.application.add_handler(CommandHandler("enable", self.cmd_enable_module))
+            self.application.add_handler(CommandHandler("disable", self.cmd_disable_module))
             self.application.add_handler(CallbackQueryHandler(self.handle_prediction_feedback))
             logger.info("Command handlers setup completed")
         except Exception as e:
@@ -69,6 +90,9 @@ class EnergyPriceBot:
                 "Available commands:\n"
                 "/check_price - Check current prices\n"
                 "/status - Check monitoring status\n"
+                "/modules - List available modules and their status\n"
+                "/enable <module> - Enable a specific module\n"
+                "/disable <module> - Disable a specific module\n"
                 "/help - Show this help message"
             )
             await update.message.reply_text(welcome_message)
@@ -81,92 +105,87 @@ class EnergyPriceBot:
         """Handle the /help command"""
         await self.cmd_start(update, context)
 
-    async def check_api_health(self):
-        """Check if the API is accessible"""
+    async def cmd_list_modules(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """List all available modules and their status"""
         try:
-            response = requests.get(HEALTH_CHECK_URL)
-            return response.status_code == 200
-        except:
-            return False
+            modules = self.module_manager.get_all_modules()
+            message = "📊 Available Modules:\n\n"
+
+            for module in modules:
+                status = "✅ Enabled" if module["enabled"] else "❌ Disabled"
+                required = " (Required)" if module["name"] == "price_monitor" else ""
+                message += f"• {module['name']}{required}: {status}\n"
+                message += f"  Description: {module['description']}\n\n"
+
+            message += "\nUse /enable <module> to enable or /disable <module> to disable a module"
+            await update.message.reply_text(message)
+        except Exception as e:
+            logger.error(f"Error listing modules: {str(e)}")
+            await update.message.reply_text("Sorry, there was an error listing the modules.")
+
+    async def cmd_enable_module(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Enable a specific module"""
+        try:
+            if not context.args:
+                await update.message.reply_text("Please specify a module name. Use /modules to see available modules.")
+                return
+
+            module_name = context.args[0].lower()
+            if module_name == "price_monitor":
+                await update.message.reply_text("The price monitoring module is required and always enabled.")
+                return
+
+            if self.module_manager.enable_module(module_name):
+                await update.message.reply_text(f"✅ Module '{module_name}' has been enabled.")
+            else:
+                await update.message.reply_text(f"❌ Could not enable module '{module_name}'. Please check the module name.")
+        except Exception as e:
+            logger.error(f"Error enabling module: {str(e)}")
+            await update.message.reply_text("Sorry, there was an error enabling the module.")
+
+    async def cmd_disable_module(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Disable a specific module"""
+        try:
+            if not context.args:
+                await update.message.reply_text("Please specify a module name. Use /modules to see available modules.")
+                return
+
+            module_name = context.args[0].lower()
+            if module_name == "price_monitor":
+                await update.message.reply_text("⚠️ The price monitoring module cannot be disabled as it is required.")
+                return
+
+            if self.module_manager.disable_module(module_name):
+                await update.message.reply_text(f"✅ Module '{module_name}' has been disabled.")
+            else:
+                await update.message.reply_text(f"❌ Could not disable module '{module_name}'. Please check the module name.")
+        except Exception as e:
+            logger.error(f"Error disabling module: {str(e)}")
+            await update.message.reply_text("Sorry, there was an error disabling the module.")
 
     async def cmd_check_price(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Check current prices on demand with predictions"""
+        """Check current prices with data from enabled modules"""
         try:
             chat_id = update.effective_chat.id
             logger.info(f"Processing /check_price command for chat_id: {chat_id}")
 
             await update.message.reply_text("🔍 Checking current prices...")
 
-            # Get price data
-            hourly_data = await PriceMonitor.check_hourly_price()
-            five_min_data = await PriceMonitor.check_five_min_price()
+            # Process data through all enabled modules
+            results = await self.module_manager.process_with_enabled_modules({})
 
-            logger.debug(f"Hourly data: {hourly_data}")
-            logger.debug(f"5-min data: {five_min_data}")
+            # Get notification data from enabled modules
+            notification_data = await self.module_manager.get_notification_data()
 
-            current_price = float(hourly_data.get('price', 0))
+            # Format and send the message
+            message = self._format_price_message(results, notification_data)
 
-            # Generate prediction data
-            predicted_price = round(current_price * 1.1, 1)
-            prediction_data = {
-                'short_term_prediction': predicted_price,
-                'confidence': 75,
-                'trend': 'rising' if predicted_price > current_price else 'falling',
-                'next_hour_range': {
-                    'low': round(current_price * 0.9, 1),
-                    'high': round(current_price * 1.2, 1)
-                }
-            }
-
-            # Format the combined price data
-            price_data = {
-                'five_min_data': five_min_data,
-                'hourly_data': hourly_data
-            }
-
-            # Send alert with feedback buttons
-            await self.send_price_alert(chat_id, price_data, prediction_data)
-            logger.info(f"Price check completed for chat_id: {chat_id}")
-
-        except Exception as e:
-            error_msg = f"❌ Error checking prices: {str(e)}"
-            logger.error(error_msg)
-            await update.message.reply_text(error_msg)
-
-    async def cmd_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Check the monitoring status"""
-        api_status = "✅ Online" if await self.check_api_health() else "❌ Offline"
-        status_message = (
-            "📊 System Status\n"
-            f"API Status: {api_status}\n"
-            f"Price Threshold: {MIN_RATE} cents"
-        )
-        await update.message.reply_text(status_message)
-
-    async def send_price_alert(self, chat_id: int, price_data: dict, prediction_data: dict | None = None):
-        """Send price alert with feedback buttons"""
-        price_record_id = None
-
-        # Store prediction in database if available
-        if prediction_data and prediction_data.get('short_term_prediction'):
-            with app.app_context():
-                price_record = PriceHistory.add_price_data(
-                    hourly_price=float(price_data.get('hourly_data', {}).get('price', 0)),
-                    predicted_price=prediction_data['short_term_prediction'],
-                    prediction_confidence=prediction_data['confidence']
-                )
-                price_record_id = price_record.id
-
-        message = self._format_price_message(price_data, prediction_data)
-        logger.debug(f"Formatted message: {message}")
-
-        try:
-            # Add feedback buttons if there's a prediction
-            if price_record_id is not None:
+            # Send alert with feedback buttons if ML module is enabled
+            if "ml_prediction" in notification_data:
                 keyboard = [
                     [
-                        InlineKeyboardButton("✅ Accurate", callback_data=f"feedback_accurate_{price_record_id}"),
-                        InlineKeyboardButton("❌ Inaccurate", callback_data=f"feedback_inaccurate_{price_record_id}")
+                        InlineKeyboardButton("✅ Accurate", callback_data="feedback_accurate"),
+                        InlineKeyboardButton("❌ Inaccurate", callback_data="feedback_inaccurate")
                     ]
                 ]
                 reply_markup = InlineKeyboardMarkup(keyboard)
@@ -182,10 +201,58 @@ class EnergyPriceBot:
                     text=message,
                     parse_mode='HTML'
                 )
-            logger.info(f"Successfully sent price alert to chat_id: {chat_id}")
+
+            logger.info(f"Price check completed for chat_id: {chat_id}")
+
         except Exception as e:
-            logger.error(f"Error sending price alert: {str(e)}")
-            raise
+            error_msg = f"❌ Error checking prices: {str(e)}"
+            logger.error(error_msg)
+            await update.message.reply_text(error_msg)
+
+    def _format_price_message(self, results: dict, notification_data: dict) -> str:
+        """Format price message with data from enabled modules"""
+        message = "📊 Energy Price Update\n\n"
+
+        # Price monitoring data (always present)
+        price_data = notification_data.get("price_monitor", {})
+        if price_data:
+            message += f"Current Price: {price_data.get('current_price')}¢\n"
+            message += f"Five-min Price: {price_data.get('five_min_price')}¢\n"
+            message += f"Trend: {price_data.get('trend', 'unknown').capitalize()}\n\n"
+
+        # Pattern analysis data (if enabled)
+        pattern_data = notification_data.get("pattern_analysis")
+        if pattern_data:
+            message += "📈 Pattern Analysis:\n"
+            message += f"• Current Trend: {pattern_data.get('current_trend', 'unknown').capitalize()}\n"
+            message += f"• Volatility: {pattern_data.get('volatility', 0):.2f}\n\n"
+
+        # ML predictions (if enabled)
+        ml_data = notification_data.get("ml_prediction")
+        if ml_data:
+            message += "🔮 Price Prediction:\n"
+            message += f"• Next Hour: {ml_data.get('predicted_price')}¢\n"
+            message += f"• Confidence: {ml_data.get('confidence')}%\n\n"
+
+        # Add timestamp
+        cst_time = datetime.now(ZoneInfo("America/Chicago"))
+        message += f"\n⏰ Last Updated: {cst_time.strftime('%Y-%m-%d %I:%M %p %Z')}"
+
+        return message
+
+    async def cmd_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Check the monitoring status"""
+        enabled_modules = self.module_manager.get_enabled_modules()
+        status_message = (
+            "📊 System Status\n\n"
+            f"Active Modules: {len(enabled_modules)}\n"
+            "Enabled Modules:\n"
+        )
+
+        for module_name in enabled_modules:
+            status_message += f"• {module_name}\n"
+
+        await update.message.reply_text(status_message)
 
     async def handle_prediction_feedback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle feedback on price predictions"""
@@ -193,12 +260,17 @@ class EnergyPriceBot:
         await query.answer()
 
         try:
-            feedback_type, record_id = query.data.split('_')[1:]
+            feedback_type = query.data.split('_')[1]
             accuracy = 1.0 if feedback_type == 'accurate' else 0.0
 
-            with app.app_context():
-                success = PriceHistory.update_prediction_accuracy(int(record_id), accuracy)
-                feedback_msg = "✅ Thank you for your feedback!" if success else "❌ Couldn't process feedback"
+            if self.ml_module.is_enabled():
+                # Update ML module with feedback
+                await self.ml_module.process({
+                    "command": "update_feedback",
+                    "accuracy": accuracy
+                })
+
+            feedback_msg = "✅ Thank you for your feedback!" if accuracy == 1.0 else "👍 Thanks for helping us improve!"
 
             await query.edit_message_reply_markup(reply_markup=None)
             await context.bot.send_message(
@@ -213,62 +285,14 @@ class EnergyPriceBot:
                 text="❌ Sorry, there was an error processing your feedback."
             )
 
-    def _format_price_message(self, price_data: dict, prediction_data: dict | None = None) -> str:
-        """Format price alert message with detailed price information and prediction"""
-        five_min_data = price_data.get('five_min_data', {})
-        hourly_data = price_data.get('hourly_data', {})
+    async def check_api_health(self):
+        """Check if the API is accessible"""
+        try:
+            response = requests.get(HEALTH_CHECK_URL)
+            return response.status_code == 200
+        except:
+            return False
 
-        # Format the header based on price trend
-        current_price = float(hourly_data.get('price', 0))
-        day_ahead = hourly_data.get('day_ahead_price', 0)
-        price_diff = current_price - day_ahead if isinstance(day_ahead, (int, float)) else 0
-
-        if price_diff <= -0.5:
-            status_emoji = "🟢"  # Green circle for good prices
-            price_status = "GOOD TIME TO USE POWER"
-        elif price_diff >= 1.0:
-            status_emoji = "🔴"  # Red circle for price spikes
-            price_status = "HIGH PRICE ALERT"
-        else:
-            status_emoji = "🟡"  # Yellow circle for normal prices
-            price_status = "NORMAL PRICE LEVELS"
-
-        message = f"{status_emoji} <b>Energy Price Alert: {price_status}</b>\n\n"
-
-        # Add current prices section with full timestamps
-        message += "📊 <b>Current Prices:</b>\n"
-        message += f"• 5-min price: {five_min_data.get('price', 'N/A')}¢\n"
-        message += f"• Hourly price: {hourly_data.get('price', 'N/A')}¢\n"
-        if day_ahead and day_ahead != 'N/A':
-            message += f"• Day ahead: {day_ahead}¢\n"
-        message += "\n"
-
-        # Add analysis section with trends
-        message += "📈 <b>Analysis:</b>\n"
-        message += f"• Trend: {five_min_data.get('trend', 'unknown').capitalize()}\n"
-        message += f"• vs Average: {price_diff:+.1f}¢\n"
-        if 'price_range' in hourly_data:
-            range_data = hourly_data['price_range']
-            message += f"• Day Range: {range_data['min']}¢ - {range_data['max']}¢\n\n"
-
-        # Add prediction section if available
-        if prediction_data and prediction_data.get('short_term_prediction'):
-            message += "🔮 <b>Price Prediction:</b>\n"
-            message += f"• Next hour: {prediction_data['short_term_prediction']:.1f}¢\n"
-            message += f"• Range: {prediction_data['next_hour_range']['low']:.1f}¢ - {prediction_data['next_hour_range']['high']:.1f}¢\n"
-            message += f"• Confidence: {prediction_data['confidence']}%\n"
-            message += f"• Trend: {prediction_data['trend'].capitalize()}\n\n"
-
-        # Add timestamp in CST
-        cst_time = datetime.now(ZoneInfo("America/Chicago"))
-        message += f"\n⏰ Last Updated: {cst_time.strftime('%Y-%m-%d %I:%M %p %Z')}"
-
-        # Add feedback request if there's a prediction
-        if prediction_data and prediction_data.get('short_term_prediction'):
-            message += "\n🎯 <b>Help us improve!</b>\n"
-            message += "Please rate this prediction's accuracy using the buttons below.\n"
-
-        return message
 
 if __name__ == '__main__':
     bot = EnergyPriceBot()

@@ -35,6 +35,10 @@ args = "Price Data Scheduler"
 task = "workflow.run"
 args = "Tesla Tests"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Telegram Bot"
+
 [[workflows.workflow]]
 name = "Telegram Price Monitor"
 author = "agent"
@@ -105,6 +109,20 @@ task = "packager.installForAll"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "python -m unittest tests/test_tesla_charging.py -v"
+
+[[workflows.workflow]]
+name = "Telegram Bot"
+author = "agent"
+
+[workflows.workflow.metadata]
+agentRequireRestartOnSave = false
+
+[[workflows.workflow.tasks]]
+task = "packager.installForAll"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "python bot.py"
 
 [[ports]]
 localPort = 5000
