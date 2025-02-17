@@ -56,21 +56,37 @@ def analytics_dashboard(chat_id):
                     alert_frequency='immediate'
                 )
 
-        # Get latest analytics
+        # Get latest analytics and price history
         analytics = UserAnalytics.query.filter_by(chat_id=chat_id)\
             .order_by(UserAnalytics.timestamp.desc())\
             .first()
 
-        # Get recent savings insights
-        insights = SavingsInsight.get_user_insights(chat_id, days=30)
-
-        # Get recent price history for the last week
         price_history = PriceHistory.get_recent_history(
             provider="ComEd",
             hours=24 * 7  # Last week of data
         )
 
-        # Calculate additional analytics
+        # Generate new insights based on current data
+        from utils.analytics_helper import generate_savings_insights, calculate_weekly_savings_potential
+
+        new_insights = generate_savings_insights(chat_id, price_history)
+        weekly_savings = calculate_weekly_savings_potential(price_history)
+
+        # Store new insights
+        with app.app_context():
+            for insight in new_insights:
+                SavingsInsight.add_insight(
+                    chat_id=chat_id,
+                    potential_savings=insight['savings'],
+                    recommendation_type=insight['type'],
+                    description=insight['description'],
+                    impact_score=insight['impact_score']
+                )
+
+        # Get all insights for display
+        insights = SavingsInsight.get_user_insights(chat_id, days=30)
+
+        # Calculate stats
         daily_stats = {}
         hourly_stats = {}
         if price_history:
@@ -119,7 +135,8 @@ def analytics_dashboard(chat_id):
             daily_stats=daily_stats,
             hourly_stats=hourly_stats,
             best_hours=best_hours,
-            worst_hours=worst_hours
+            worst_hours=worst_hours,
+            weekly_savings_potential=weekly_savings
         )
 
     except Exception as e:

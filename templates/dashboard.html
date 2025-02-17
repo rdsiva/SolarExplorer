@@ -130,20 +130,44 @@
             </div>
         </div>
 
+        <!-- Savings Potential Section -->
+        <div class="card mb-4">
+            <div class="card-body">
+                <h5 class="card-title">💰 Savings Potential</h5>
+                <div class="alert alert-success">
+                    <h4 class="alert-heading">Weekly Savings Potential: ${{ "%.2f"|format(weekly_savings_potential) }}</h4>
+                    <p>By optimizing your energy usage based on price patterns, you could save this amount weekly.</p>
+                </div>
+            </div>
+        </div>
+
+
         <!-- Savings Insights -->
         <div class="card mb-4">
             <div class="card-body">
-                <h5 class="card-title">Savings Insights</h5>
+                <h5 class="card-title">🎯 Personalized Insights</h5>
                 {% if insights %}
                     {% for insight in insights %}
                     <div class="alert {% if insight.impact_score >= 80 %}alert-danger{% elif insight.impact_score >= 50 %}alert-warning{% else %}alert-info{% endif %} mb-3">
-                        <h6>Potential Savings: ${{ "%.2f"|format(insight.potential_savings) }}</h6>
-                        <p>{{ insight.description }}</p>
-                        <small>Impact Score: {{ insight.impact_score }}/100</small>
+                        <div class="d-flex justify-content-between align-items-start">
+                            <div>
+                                <h6 class="alert-heading">💡 Potential Savings: ${{ "%.2f"|format(insight.potential_savings) }}</h6>
+                                <p class="mb-1">{{ insight.description }}</p>
+                                <div class="progress mt-2" style="height: 5px;">
+                                    <div class="progress-bar" role="progressbar" style="width: {{ insight.impact_score }}%" 
+                                         aria-valuenow="{{ insight.impact_score }}" aria-valuemin="0" aria-valuemax="100">
+                                    </div>
+                                </div>
+                                <small class="text-muted">Impact Score: {{ insight.impact_score }}/100</small>
+                            </div>
+                            <button class="btn btn-sm btn-outline-success" onclick="markImplemented({{ insight.id }})">
+                                ✓ Mark as Implemented
+                            </button>
+                        </div>
                     </div>
                     {% endfor %}
                 {% else %}
-                    <p>No savings insights available</p>
+                    <p>No savings insights available yet. Check back soon!</p>
                 {% endif %}
             </div>
         </div>
@@ -211,6 +235,11 @@
                 }
             }
         });
+
+        function markImplemented(insightId) {
+          // Add your implementation logic here to mark the insight as implemented.  This might involve an AJAX call to your backend.
+          console.log("Insight " + insightId + " marked as implemented");
+        }
     </script>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
