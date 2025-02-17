@@ -158,7 +158,7 @@ task = "packager.installForAll"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "python price_alert_bot.py"
+args = "python bot_runner.py"
 
 [[ports]]
 localPort = 5000

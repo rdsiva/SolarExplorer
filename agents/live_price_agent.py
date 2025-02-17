@@ -6,6 +6,7 @@ from typing import Dict, Any, Optional
 import json
 
 from .base_agent import BaseAgent
+from .protocols.message_protocol import MessageType, MessagePriority, Message
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +18,10 @@ class LivePriceAgent(BaseAgent):
         self.base_url = "https://hourlypricing.comed.com/api"
         self.price_threshold = self.config.get('price_threshold', 3.0)
         self.check_interval = self.config.get('check_interval', 300)  # 5 minutes default
+
+        # Subscribe to relevant message types
+        self.subscribe(MessageType.COMMAND)
+        self.subscribe(MessageType.PREFERENCE_UPDATE)
 
     async def get_current_price(self) -> Dict[str, Any]:
         """Fetch current price from ComEd API."""
@@ -74,33 +79,59 @@ class LivePriceAgent(BaseAgent):
             f"🕒 Time: {datetime.fromisoformat(price_data['timestamp']).strftime('%Y-%m-%d %H:%M:%S')} UTC"
         )
 
-    async def process(self, message: Dict[str, Any]) -> Dict[str, Any]:
+    async def process(self, message: Message) -> Optional[Message]:
         """Process incoming messages and return price data."""
         try:
-            command = message.get('command', 'get_price')
-
-            if command == 'get_price':
+            if message.type == MessageType.COMMAND and message.payload.get('command') == 'get_price':
                 price_data = await self.get_current_price()
                 if price_data:
                     alert_message = self.format_alert_message(price_data)
-                    # Notify other agents if price exceeds threshold
-                    if price_data['current_hour'] > self.price_threshold:
-                        await self.send_message('notification', {
-                            'type': 'price_alert',
-                            'message': alert_message,
-                            'data': price_data
-                        })
-                    return {
-                        'status': 'success',
+
+                    # Send price update to all interested agents
+                    price_message = {
                         'data': price_data,
-                        'message': alert_message
+                        'formatted_message': alert_message,
+                        'threshold_exceeded': price_data['current_hour'] > self.price_threshold
                     }
 
-            return {'status': 'error', 'message': 'Invalid command or no data available'}
+                    # If threshold exceeded, send with high priority
+                    priority = (MessagePriority.HIGH 
+                              if price_data['current_hour'] > self.price_threshold 
+                              else MessagePriority.NORMAL)
+
+                    return Message(
+                        msg_type=MessageType.PRICE_UPDATE,
+                        source=self.name,
+                        target=message.source,
+                        payload=price_message,
+                        priority=priority,
+                        correlation_id=message.correlation_id
+                    )
+
+            elif message.type == MessageType.PREFERENCE_UPDATE:
+                # Update agent preferences
+                if 'price_threshold' in message.payload:
+                    self.price_threshold = float(message.payload['price_threshold'])
+                if 'check_interval' in message.payload:
+                    self.check_interval = int(message.payload['check_interval'])
+
+                return Message(
+                    msg_type=MessageType.RESPONSE,
+                    source=self.name,
+                    target=message.source,
+                    payload={'status': 'preferences_updated'},
+                    correlation_id=message.correlation_id
+                )
 
         except Exception as e:
             logger.error(f"Error in LivePriceAgent process: {str(e)}")
-            return {'status': 'error', 'message': str(e)}
+            return Message(
+                msg_type=MessageType.ERROR,
+                source=self.name,
+                target=message.source,
+                payload={'error': str(e)},
+                correlation_id=message.correlation_id
+            )
 
     async def start(self):
         """Start the price monitoring loop."""
@@ -109,7 +140,14 @@ class LivePriceAgent(BaseAgent):
             try:
                 price_data = await self.get_current_price()
                 if price_data:
-                    await self.process({'command': 'get_price'})
+                    # Process price data as if received a command
+                    command_message = Message(
+                        msg_type=MessageType.COMMAND,
+                        source='system',
+                        target=self.name,
+                        payload={'command': 'get_price'}
+                    )
+                    await self.process(command_message)
                 await asyncio.sleep(self.check_interval)
             except Exception as e:
                 logger.error(f"Error in price monitoring loop: {str(e)}")

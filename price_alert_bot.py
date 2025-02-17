@@ -1,9 +1,14 @@
 import os
 import logging
 import asyncio
+import nest_asyncio
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from agents.live_price_agent import LivePriceAgent
+from agents.protocols.message_protocol import Message, MessageType, MessagePriority
+
+# Enable nested event loops
+nest_asyncio.apply()
 
 # Configure logging
 logging.basicConfig(
@@ -35,37 +40,74 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def get_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Get current energy prices when /price command is issued."""
     try:
-        # Get price data from LivePrice agent
-        price_data = await price_agent.get_current_price()
-        if price_data:
-            # Format message using the agent's formatter
-            message = price_agent.format_alert_message(price_data)
+        # Create a command message
+        command_msg = Message(
+            msg_type=MessageType.COMMAND,
+            source='telegram_bot',
+            target='LivePrice',
+            payload={'command': 'get_price'},
+            priority=MessagePriority.NORMAL
+        )
+
+        # Process command through the agent
+        response = await price_agent.process(command_msg)
+
+        if response and response.type == MessageType.PRICE_UPDATE:
+            message = response.payload['formatted_message']
         else:
             message = "⚠️ Unable to fetch price data at the moment. Please try again later."
-        
+
         await update.message.reply_text(message)
     except Exception as e:
         logger.error(f"Error getting price data: {str(e)}")
         await update.message.reply_text("❌ An error occurred while fetching price data.")
 
-def main():
+async def run_bot():
     """Start the bot."""
-    # Get token from environment variable
-    token = os.environ.get("TELEGRAM_BOT_TOKEN")
-    if not token:
-        logger.error("TELEGRAM_BOT_TOKEN not found in environment variables")
-        return
+    try:
+        # Get token from environment variable
+        token = os.environ.get("TELEGRAM_BOT_TOKEN")
+        if not token:
+            logger.error("TELEGRAM_BOT_TOKEN not found in environment variables")
+            return
 
-    # Create the Application
-    application = Application.builder().token(token).build()
+        # Create and initialize the Application
+        application = Application.builder().token(token).build()
+        await application.initialize()
 
-    # Add command handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("price", get_price))
+        # Add command handlers
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(CommandHandler("help", help_command))
+        application.add_handler(CommandHandler("price", get_price))
 
-    # Start the bot
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+        # Start the LivePrice agent
+        price_agent_task = asyncio.create_task(price_agent.start())
+
+        # Start the Telegram bot
+        try:
+            await application.start()
+            await application.run_polling(allowed_updates=Update.ALL_TYPES)
+        finally:
+            # Ensure proper cleanup
+            await price_agent.stop()
+            await application.stop()
+            await application.shutdown()
+
+    except Exception as e:
+        logger.error(f"Error in run_bot: {str(e)}")
+        # Ensure cleanup even if an error occurs
+        if 'application' in locals():
+            await application.shutdown()
+
+def main():
+    """Main entry point."""
+    try:
+        # Run the event loop
+        asyncio.run(run_bot())
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user")
+    except Exception as e:
+        logger.error(f"Unexpected error: {str(e)}")
 
 if __name__ == '__main__':
     main()
