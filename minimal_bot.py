@@ -22,6 +22,14 @@ logger = logging.getLogger(__name__)
 # Conversation states
 THRESHOLD = 1
 
+# Add the escape function at the top of the file, after imports
+def escape_markdown(text):
+    """Escape special characters for MarkdownV2 format"""
+    characters_to_escape = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+    for char in characters_to_escape:
+        text = text.replace(char, f'\\{char}')
+    return text
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send a message when the command /start is issued."""
     chat_id = update.effective_chat.id
@@ -120,7 +128,10 @@ async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
             current_price = None
 
         if current_price is None:
-            await update.message.reply_text("❌ Error: Current price data is not available. Please try again later.")
+            await update.message.reply_text(
+                escape_markdown("❌ Error: Current price data is not available. Please try again later."),
+                parse_mode="MarkdownV2"
+            )
             return
 
         # Get user's custom threshold
@@ -132,7 +143,10 @@ async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
         prediction = await price_predictor.predict(current_price)
 
         if not prediction:
-            await update.message.reply_text("❌ Error generating price prediction. Please try again later.")
+            await update.message.reply_text(
+                escape_markdown("❌ Error generating price prediction. Please try again later."),
+                parse_mode="MarkdownV2"
+            )
             return
 
         predicted_price = prediction['predicted_price']
@@ -158,13 +172,14 @@ async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 db.session.rollback()
 
         # Format message with ML predictions and patterns
-        message = "📊 Current Energy Prices:\n\n"
-        message += f"5\\-min price: {five_min_data.get('price', 'N/A')}¢\n"
-        message += f"Hourly price: {current_price:.2f}¢\n"
-        message += f"Your Alert Threshold: {threshold}¢\n"
+        message_parts = []
+        message_parts.append("📊 Current Energy Prices:\n")
+        message_parts.append(f"5\\-min price: {escape_markdown(str(five_min_data.get('price', 'N/A')))}")
+        message_parts.append(f"Hourly price: {escape_markdown(f'{current_price:.2f}')}")
+        message_parts.append(f"Alert Threshold: {escape_markdown(f'{threshold:.1f}')}")
 
         # Add pattern analysis section
-        message += "\n🔍 Pattern Analysis:\n"
+        message_parts.append("\n🔍 Pattern Analysis:")
         if patterns:
             pattern_emojis = {
                 'spike': '⚡',
@@ -174,58 +189,69 @@ async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
             }
             for pattern, detected in patterns.items():
                 if detected:
-                    message += f"{pattern_emojis.get(pattern, '•')} {pattern.title()} pattern detected\n"
+                    message_parts.append(f"{pattern_emojis.get(pattern, '•')} {pattern.title()} pattern detected")
         else:
-            message += "No significant patterns detected\n"
+            message_parts.append("No significant patterns detected")
 
         # Add smart price alert based on ML prediction
         if predicted_price > threshold:
-            message += f"\n⚠️ Warning: ML model predicts price will exceed your threshold\\!\n"
-            message += f"Expected to reach {predicted_price:.1f}¢ \\(Confidence: {confidence}%\\)\n"
+            message_parts.append("\n⚠️ Warning: ML model predicts price will exceed your threshold\\!")
+            message_parts.append(f"Expected to reach {escape_markdown(f'{predicted_price:.1f}')}¢ \\(Confidence: {escape_markdown(str(int(confidence)))}%\\)")
         elif current_price > threshold:
-            message += f"\n🔴 Currently Above Threshold\n"
+            message_parts.append("\n🔴 Currently Above Threshold")
         else:
-            message += f"\n🟢 Below Threshold\n"
+            message_parts.append("\n🟢 Below Threshold")
 
-        message += f"Trend: {prediction['trend'].capitalize()}\n"
+        message_parts.append(f"Trend: {prediction['trend'].capitalize()}")
 
         # Add ML prediction section
-        message += "\n🤖 ML Price Prediction:\n"
-        message += f"Next hour: {predicted_price:.1f}¢\n"
-        message += f"Range: {prediction_range['low']:.1f}¢ \\- {prediction_range['high']:.1f}¢\n"
-        message += f"Confidence: {confidence}%\n"
+        message_parts.append("\n🤖 ML Price Prediction:")
+        message_parts.append(f"Next hour: {escape_markdown(f'{predicted_price:.1f}')}¢")
+        # Fix the dictionary access in the f-string
+        low_price = escape_markdown(f"{prediction_range['low']:.1f}")
+        high_price = escape_markdown(f"{prediction_range['high']:.1f}")
+        message_parts.append(f"Range: {low_price}¢ \\- {high_price}¢")
+        message_parts.append(f"Confidence: {escape_markdown(str(int(confidence)))}%")
 
         # Add timestamp
         cst_time = datetime.now(ZoneInfo("America/Chicago"))
-        message += f"\n⏰ Last Updated: {cst_time.strftime('%Y-%m-%d %I:%M %p %Z')}"
+        message_parts.append(f"\n⏰ Last Updated: {escape_markdown(cst_time.strftime('%Y-%m-%d %I:%M %p %Z'))}")
 
         # Add dashboard link with proper MarkdownV2 escaping
-        dashboard_url = f"http://0\\.0\\.0\\.0:5000/dashboard/{chat_id}"
-        message += f"\n\n📈 [View Your Analytics Dashboard]({dashboard_url})"
+        dashboard_url = "https://" + os.environ.get("REPL_SLUG", "0-0-0-0") + ".repl.co/dashboard/" + str(chat_id)
+        message_parts.append(f"\n\n📈 [View Your Analytics Dashboard]({dashboard_url})")
+
+        # Combine all parts with proper line endings
+        message = "\n".join(message_parts)
 
         # Add feedback request if prediction was stored
         if price_record and price_record.id:
-            message += "\n\n🎯 Help us improve\\! Was this ML prediction accurate?"
+            message += "\n\n🎯 Help us improve\\! Was this prediction accurate?"
             keyboard = [[
                 InlineKeyboardButton("✅ Good", callback_data=f"feedback_accurate_{price_record.id}"),
                 InlineKeyboardButton("❌ Poor", callback_data=f"feedback_inaccurate_{price_record.id}")
             ]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await update.message.reply_text(
-                message,
+                text=message,
                 parse_mode="MarkdownV2",
-                reply_markup=reply_markup
+                reply_markup=reply_markup,
+                disable_web_page_preview=True
             )
         else:
             await update.message.reply_text(
-                message,
-                parse_mode="MarkdownV2"
+                text=message,
+                parse_mode="MarkdownV2",
+                disable_web_page_preview=True
             )
 
     except Exception as e:
         error_msg = f"❌ Error checking prices: {str(e)}"
         logger.error(error_msg, exc_info=True)
-        await update.message.reply_text(error_msg)
+        await update.message.reply_text(
+            text=escape_markdown(error_msg),
+            parse_mode="MarkdownV2"
+        )
 
 async def handle_prediction_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle feedback on price predictions"""
@@ -242,17 +268,17 @@ async def handle_prediction_feedback(update: Update, context: ContextTypes.DEFAU
         with app.app_context():
             try:
                 success = PriceHistory.update_prediction_accuracy(int(record_id), accuracy)
-                feedback_msg = "✅ Thank you for your feedback\\!" if success else "❌ Couldn't process feedback"
+                feedback_msg = "✅ Thank you for your feedback\\!" if success else "❌ Could not process feedback\\."
                 logger.info(f"Feedback processing {'successful' if success else 'failed'}")
             except Exception as db_error:
                 logger.error(f"Database error while processing feedback: {str(db_error)}", exc_info=True)
                 success = False
-                feedback_msg = "❌ Error processing feedback"
+                feedback_msg = "❌ Error processing feedback\\."
 
         await query.edit_message_reply_markup(reply_markup=None)
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text=feedback_msg,
+            text=escape_markdown(feedback_msg),
             parse_mode="MarkdownV2"
         )
         logger.info("Feedback confirmation sent to user")
@@ -261,7 +287,7 @@ async def handle_prediction_feedback(update: Update, context: ContextTypes.DEFAU
         logger.error(f"Error processing prediction feedback: {str(e)}", exc_info=True)
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text="❌ Sorry, there was an error processing your feedback\\.",
+            text=escape_markdown("❌ Sorry, there was an error processing your feedback."),
             parse_mode="MarkdownV2"
         )
 

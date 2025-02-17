@@ -10,7 +10,7 @@
 <body>
     <div class="container py-4">
         <h1 class="mb-4">Energy Analytics Dashboard</h1>
-        
+
         <!-- User Info -->
         <div class="card mb-4">
             <div class="card-body">
@@ -45,6 +45,86 @@
                         {% else %}
                             <p>No analytics data available</p>
                         {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Optimal Usage Times -->
+        <div class="row mb-4">
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title">Best Times to Use Energy</h5>
+                        {% if best_hours %}
+                            <div class="list-group">
+                            {% for hour, stats in best_hours %}
+                                <div class="list-group-item">
+                                    <h6>{{ '%02d:00'|format(hour) }} - {{ '%02d:00'|format((hour + 1) % 24) }}</h6>
+                                    <p class="mb-1">Average Price: {{ stats.average }}¢</p>
+                                    <small>Range: {{ stats.min }}¢ - {{ stats.max }}¢</small>
+                                </div>
+                            {% endfor %}
+                            </div>
+                        {% else %}
+                            <p>No data available</p>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title">Times to Avoid</h5>
+                        {% if worst_hours %}
+                            <div class="list-group">
+                            {% for hour, stats in worst_hours %}
+                                <div class="list-group-item">
+                                    <h6>{{ '%02d:00'|format(hour) }} - {{ '%02d:00'|format((hour + 1) % 24) }}</h6>
+                                    <p class="mb-1">Average Price: {{ stats.average }}¢</p>
+                                    <small>Range: {{ stats.min }}¢ - {{ stats.max }}¢</small>
+                                </div>
+                            {% endfor %}
+                            </div>
+                        {% else %}
+                            <p>No data available</p>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Daily Patterns -->
+        <div class="card mb-4">
+            <div class="card-body">
+                <h5 class="card-title">Daily Price Patterns</h5>
+                <div class="row">
+                    <div class="col-md-6">
+                        <canvas id="dailyPatternsChart"></canvas>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="table-responsive">
+                            <table class="table table-sm">
+                                <thead>
+                                    <tr>
+                                        <th>Day</th>
+                                        <th>Avg</th>
+                                        <th>Min</th>
+                                        <th>Max</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for day, stats in daily_stats.items() %}
+                                    <tr>
+                                        <td>{{ day }}</td>
+                                        <td>{{ stats.average }}¢</td>
+                                        <td>{{ stats.min }}¢</td>
+                                        <td>{{ stats.max }}¢</td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -97,6 +177,35 @@
                         title: {
                             display: true,
                             text: 'Time'
+                        }
+                    }
+                }
+            }
+        });
+
+        // Initialize daily patterns chart
+        const dailyCtx = document.getElementById('dailyPatternsChart').getContext('2d');
+        const dailyStats = {{ daily_stats|tojson }};
+        new Chart(dailyCtx, {
+            type: 'bar',
+            data: {
+                labels: Object.keys(dailyStats),
+                datasets: [{
+                    label: 'Average Price (¢/kWh)',
+                    data: Object.values(dailyStats).map(stats => stats.average),
+                    backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                    borderColor: 'rgb(75, 192, 192)',
+                    borderWidth: 1
+                }]
+            },
+            options: {
+                responsive: true,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        title: {
+                            display: true,
+                            text: 'Average Price (¢/kWh)'
                         }
                     }
                 }
