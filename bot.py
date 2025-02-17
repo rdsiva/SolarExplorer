@@ -154,7 +154,7 @@ class EnergyPriceBot:
         logger.info(f"Current CST Time: {cst_now.strftime('%Y-%m-%d %I:%M %p')}")
         return cst_now
 
-    async def send_price_alert(self, chat_id: int, price_data: dict, prediction_data: dict = None):
+    async def send_price_alert(self, chat_id: int, price_data: dict, prediction_data: dict | None = None):
         """Send price alert with feedback buttons"""
         price_record_id = None
 
@@ -225,7 +225,7 @@ class EnergyPriceBot:
                 text="❌ Sorry, there was an error processing your feedback."
             )
 
-    def _format_price_message(self, price_data: dict, prediction_data: dict = None) -> str:
+    def _format_price_message(self, price_data: dict, prediction_data: dict | None = None) -> str:
         """Format price alert message with prediction information"""
         message = price_data.get('message', '')
 

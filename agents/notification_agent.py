@@ -113,12 +113,12 @@ class NotificationAgent(BaseAgent):
                 self.notification_queue.insert(0, notification)
                 break
 
-    def _format_notification_message(self, price_data: Dict[str, Any], analysis: Dict[str, Any], prediction: Dict[str, Any]) -> str:
-        five_min_data = price_data.get("five_min_data", {})
-        hourly_data = price_data.get("hourly_data", {})
+    def _format_notification_message(self, price_data: Dict[str, Any] | None = None, analysis: Dict[str, Any] | None = None, prediction: Dict[str, Any] | None = None) -> str:
+        five_min_data = price_data.get("five_min_data", {}) if price_data else {}
+        hourly_data = price_data.get("hourly_data", {}) if price_data else {}
 
-        current_price = analysis.get("current_price", 0)
-        average_price = analysis.get("average_price", 0)
+        current_price = analysis.get("current_price", 0) if analysis else 0
+        average_price = analysis.get("average_price", 0) if analysis else 0
         price_diff = current_price - average_price
 
         # Determine price status emoji and message
@@ -138,9 +138,9 @@ class NotificationAgent(BaseAgent):
             f"• 5-min price: {five_min_data.get('price', 'N/A')}¢\n"
             f"• Hourly price: {hourly_data.get('price', 'N/A')}¢\n\n"
             f"📈 <b>Analysis:</b>\n"
-            f"• Trend: {analysis.get('price_trend', 'unknown')}\n"
+            f"• Trend: {analysis.get('price_trend', 'unknown') if analysis else 'unknown'}\n"
             f"• vs Average: {price_diff:+.1f}¢\n"
-            f"• Day Range: {analysis.get('min_price', 'N/A')}¢ - {analysis.get('max_price', 'N/A')}¢\n\n"
+            f"• Day Range: {analysis.get('min_price', 'N/A') if analysis else 'N/A'}¢ - {analysis.get('max_price', 'N/A') if analysis else 'N/A'}¢\n\n"
         )
 
         # Add price prediction if available
