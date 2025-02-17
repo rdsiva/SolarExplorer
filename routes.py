@@ -1,7 +1,7 @@
 from flask import jsonify, render_template, request, redirect, url_for
 from datetime import datetime, timedelta
 import numpy as np
-from app import app
+from app import app  # Import the Flask app instance
 from providers.comed_provider import ComedProvider
 from models import UserPreferences, UserAnalytics, SavingsInsight, PriceHistory, TeslaPreferences
 from agents.tesla_charging_agent import TeslaAPI
@@ -327,3 +327,9 @@ def agent_monitor():
         logger.error(f"Error displaying agent monitor: {str(e)}", exc_info=True)
         return render_template('error.html',
             message="An error occurred while loading the agent monitor."), 500
+
+# Add a root route for testing
+@app.route('/')
+def index():
+    """Home page route"""
+    return render_template('base.html')

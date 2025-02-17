@@ -9,12 +9,11 @@ from database import db, init_db
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-# Log initialization start
+# Create Flask app
+app = Flask(__name__)
 logger.info("Starting Flask application initialization...")
 
 try:
-    app = Flask(__name__)
-
     # Log environment variables (without sensitive data)
     logger.info("Checking environment variables...")
     if not os.environ.get("SESSION_SECRET"):
@@ -52,9 +51,10 @@ try:
         agent_manager = AgentManager()
 
         # Import routes last, after all initialization is complete
-        import routes
+        logger.info("Registering routes...")
+        from routes import *  # This will register all routes with the app
 
-        logger.info("Flask application initialization completed")
+    logger.info("Flask application initialization completed")
 
 except Exception as e:
     logger.critical(f"Failed to initialize Flask application: {str(e)}", exc_info=True)
