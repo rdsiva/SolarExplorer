@@ -99,8 +99,6 @@ async def setup_webhook(app_instance: Application):
 
         if new_webhook_info.last_error:
             logger.warning(f"Webhook has errors: {new_webhook_info.last_error}")
-            if "Connection refused" in str(new_webhook_info.last_error):
-                logger.error("Connection refused error detected. Please ensure the webhook URL is accessible.")
 
         return True
 
@@ -245,6 +243,27 @@ async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(error_msg)
         await update.message.reply_text("Sorry, there was an error processing your request.")
 
+async def init_modules(application: Application) -> ModuleManager:
+    """Initialize and configure bot modules"""
+    try:
+        # Initialize ModuleManager
+        module_manager = ModuleManager()
+
+        # Register and initialize price monitor module
+        price_monitor = get_price_monitor_module()
+        price_monitor.set_bot(application.bot)
+        await price_monitor.initialize()
+        module_manager.register_module(price_monitor)
+
+        # Enable required modules
+        module_manager.enable_module("price_monitor")
+
+        return module_manager
+
+    except Exception as e:
+        logger.error(f"Failed to initialize modules: {str(e)}", exc_info=True)
+        raise
+
 async def init_telegram_bot():
     """Initialize the Telegram bot with webhook support and improved error handling"""
     try:
@@ -253,33 +272,24 @@ async def init_telegram_bot():
 
         logger.info("Starting bot initialization...")
 
-        # Initialize and verify bot credentials
-        try:
-            application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-            bot_info = await application.bot.get_me()
-            logger.info(f"Bot initialized: @{bot_info.username}")
-        except Exception as e:
-            raise ValueError(f"Failed to initialize bot with provided token: {str(e)}")
+        # Initialize bot
+        application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
         # Initialize modules
-        try:
-            module_manager = await init_modules(application)
-            application.bot_data['module_manager'] = module_manager
-        except Exception as e:
-            raise ValueError(f"Failed to initialize modules: {str(e)}")
+        module_manager = await init_modules(application)
+        application.bot_data['module_manager'] = module_manager
 
         # Register command handlers
-        logger.info("Registering command handlers...")
         application.add_handler(CommandHandler("start", cmd_start))
         application.add_handler(CommandHandler("help", cmd_help))
         application.add_handler(CommandHandler("check", cmd_check))
-        logger.info("Command handlers registered successfully")
 
         # Set up webhook with retries
         MAX_RETRIES = 3
         retry_count = 0
         while retry_count < MAX_RETRIES:
             if await setup_webhook(application):
+                logger.info("Webhook setup successful")
                 break
             retry_count += 1
             if retry_count < MAX_RETRIES:
