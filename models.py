@@ -102,3 +102,72 @@ class UserPreferences(db.Model):
 
         db.session.commit()
         return prefs
+
+class UserAnalytics(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    chat_id = db.Column(db.String(100), db.ForeignKey('user_preferences.chat_id'), nullable=False)
+    timestamp = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    avg_daily_price = db.Column(db.Float, nullable=True)
+    peak_usage_time = db.Column(db.Time, nullable=True)
+    low_price_periods = db.Column(db.JSON, nullable=True)  # Store periods of consistently low prices
+    high_price_periods = db.Column(db.JSON, nullable=True)  # Store periods of consistently high prices
+    monthly_price_trend = db.Column(db.String(20), nullable=True)  # rising, falling, stable
+
+    # Relationship
+    user = db.relationship('UserPreferences', backref=db.backref('analytics', lazy=True))
+
+    @staticmethod
+    def create_or_update_analytics(chat_id: str, **kwargs) -> "UserAnalytics":
+        """Create or update user analytics"""
+        analytics = UserAnalytics.query.filter_by(
+            chat_id=str(chat_id),
+            timestamp=datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        ).first()
+
+        if not analytics:
+            analytics = UserAnalytics(chat_id=str(chat_id))
+            db.session.add(analytics)
+
+        for key, value in kwargs.items():
+            if hasattr(analytics, key):
+                setattr(analytics, key, value)
+
+        db.session.commit()
+        return analytics
+
+class SavingsInsight(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    chat_id = db.Column(db.String(100), db.ForeignKey('user_preferences.chat_id'), nullable=False)
+    timestamp = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    potential_savings = db.Column(db.Float, nullable=False)  # Estimated savings in dollars
+    recommendation_type = db.Column(db.String(50), nullable=False)  # e.g., 'shift_usage', 'reduce_peak'
+    description = db.Column(db.Text, nullable=False)  # Detailed recommendation
+    impact_score = db.Column(db.Integer, nullable=False)  # 1-100 score indicating potential impact
+    implemented = db.Column(db.Boolean, default=False)  # Track if user implemented this saving
+
+    # Relationship
+    user = db.relationship('UserPreferences', backref=db.backref('savings_insights', lazy=True))
+
+    @staticmethod
+    def add_insight(chat_id: str, potential_savings: float, recommendation_type: str, 
+                   description: str, impact_score: int) -> "SavingsInsight":
+        """Add a new savings insight"""
+        insight = SavingsInsight(
+            chat_id=str(chat_id),
+            potential_savings=potential_savings,
+            recommendation_type=recommendation_type,
+            description=description,
+            impact_score=impact_score
+        )
+        db.session.add(insight)
+        db.session.commit()
+        return insight
+
+    @staticmethod
+    def get_user_insights(chat_id: str, days: int = 30) -> List["SavingsInsight"]:
+        """Get recent insights for a user"""
+        cutoff_time = datetime.utcnow() - timedelta(days=days)
+        return SavingsInsight.query.filter(
+            SavingsInsight.chat_id == str(chat_id),
+            SavingsInsight.timestamp >= cutoff_time
+        ).order_by(SavingsInsight.timestamp.desc()).all()
