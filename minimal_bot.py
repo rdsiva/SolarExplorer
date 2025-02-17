@@ -11,6 +11,7 @@ from models import PriceHistory, UserPreferences, TeslaPreferences
 from app import app, db
 from price_prediction import price_predictor
 from tesla_api import TeslaAPI 
+from modules import ModuleManager, PriceMonitorModule, PatternAnalysisModule, MLPredictionModule
 
 # Configure logging
 logging.basicConfig(
@@ -19,6 +20,20 @@ logging.basicConfig(
     handlers=[logging.StreamHandler()]
 )
 logger = logging.getLogger(__name__)
+
+# Initialize ModuleManager and modules as global variables
+module_manager = ModuleManager()
+price_module = PriceMonitorModule()
+pattern_module = PatternAnalysisModule()
+ml_module = MLPredictionModule()
+
+# Register modules
+module_manager.register_module(price_module)
+module_manager.register_module(pattern_module)
+module_manager.register_module(ml_module)
+
+# Enable price monitoring by default (required)
+module_manager.enable_module("price_monitor")
 
 # Conversation states
 THRESHOLD = 1
@@ -60,7 +75,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/tesla_update - Update Tesla preferences\n"
         "/tesla_disable - Disable Tesla integration\n"
         "/help - Show this help message\n"
-        "/modules - List available modules"
+        "/modules - List available modules\n"
+        "/enable <module_name> - Enable a specific module\n"
+        "/disable <module_name> - Disable a specific module"
     )
     await update.message.reply_text(welcome_message)
 
@@ -447,11 +464,18 @@ async def tesla_callback_url(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def list_modules(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """List all available modules and their status"""
+    chat_id = update.effective_chat.id
+    logger.info(f"Received /modules command from chat_id: {chat_id}")
+
     try:
-        modules = bot.module_manager.get_all_modules()
+        logger.info("Fetching modules from ModuleManager...")
+        modules = module_manager.get_all_modules()
+        logger.info(f"Retrieved modules: {modules}")
+
         message = "📊 Available Modules:\n\n"
 
         # First list required price monitor module
+        logger.info("Building message with required modules...")
         for module in modules:
             if module["name"] == "price_monitor":
                 message += (
@@ -462,6 +486,7 @@ async def list_modules(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 break
 
         # Then list optional modules
+        logger.info("Adding optional modules to message...")
         optional_count = 2
         for module in modules:
             if module["name"] != "price_monitor":
@@ -478,10 +503,74 @@ async def list_modules(update: Update, context: ContextTypes.DEFAULT_TYPE):
         repl_owner = os.environ.get("REPL_OWNER", "")
         message += f"\n🌐 Manage modules at:\nhttps://{repl_slug}.{repl_owner}.repl.co/module-management"
 
+        logger.info("Sending module list message...")
         await update.message.reply_text(message)
+        logger.info("Module list message sent successfully")
+
     except Exception as e:
-        logger.error(f"Error listing modules: {str(e)}")
-        await update.message.reply_text("Sorry, there was an error listing the modules.")
+        logger.error(f"Error listing modules: {str(e)}", exc_info=True)
+        logger.error(f"Module manager state: {vars(module_manager)}")
+        await update.message.reply_text(
+            "❌ Sorry, there was an error listing the modules. Please try again later."
+        )
+
+async def cmd_enable_module(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Enable a specific module via command"""
+    try:
+        if not context.args:
+            await update.message.reply_text(
+                "Please specify a module name. Use /modules to see available modules."
+            )
+            return
+
+        module_name = context.args[0].lower()
+        logger.info(f"Attempting to enable module: {module_name}")
+
+        if module_name == "price_monitor":
+            await update.message.reply_text("The price monitoring module is required and always enabled.")
+            return
+
+        if module_manager.enable_module(module_name):
+            await update.message.reply_text(f"✅ Module '{module_name}' has been enabled.")
+            logger.info(f"Successfully enabled module: {module_name}")
+        else:
+            await update.message.reply_text(
+                f"❌ Could not enable module '{module_name}'. Please check the module name."
+            )
+            logger.warning(f"Failed to enable module: {module_name}")
+
+    except Exception as e:
+        logger.error(f"Error enabling module: {str(e)}", exc_info=True)
+        await update.message.reply_text("Sorry, there was an error enabling the module.")
+
+async def cmd_disable_module(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Disable a specific module via command"""
+    try:
+        if not context.args:
+            await update.message.reply_text(
+                "Please specify a module name. Use /modules to see available modules."
+            )
+            return
+
+        module_name = context.args[0].lower()
+        logger.info(f"Attempting to disable module: {module_name}")
+
+        if module_name == "price_monitor":
+            await update.message.reply_text("⚠️ The price monitoring module cannot be disabled as it is required.")
+            return
+
+        if module_manager.disable_module(module_name):
+            await update.message.reply_text(f"✅ Module '{module_name}' has been disabled.")
+            logger.info(f"Successfully disabled module: {module_name}")
+        else:
+            await update.message.reply_text(
+                f"❌ Could not disable module '{module_name}'. Please check the module name."
+            )
+            logger.warning(f"Failed to disable module: {module_name}")
+
+    except Exception as e:
+        logger.error(f"Error disabling module: {str(e)}", exc_info=True)
+        await update.message.reply_text("Sorry, there was an error disabling the module.")
 
 def main():
     """Start the bot."""
@@ -513,7 +602,9 @@ def main():
         application.add_handler(CommandHandler("tesla_status", tesla_status))
         application.add_handler(CommandHandler("tesla_disable", tesla_disable))
         application.add_handler(CommandHandler("tesla_url", tesla_callback_url))
-        application.add_handler(CommandHandler("modules", list_modules)) # Added module handler
+        application.add_handler(CommandHandler("modules", list_modules))
+        application.add_handler(CommandHandler("enable", cmd_enable_module))  # Add enable command
+        application.add_handler(CommandHandler("disable", cmd_disable_module))  # Add disable command
         application.add_handler(threshold_handler)
         application.add_handler(tesla_setup_handler)
         application.add_handler(CallbackQueryHandler(handle_prediction_feedback))

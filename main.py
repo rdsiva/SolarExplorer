@@ -10,7 +10,12 @@ logger = logging.getLogger(__name__)
 @app.route('/')
 def root():
     """Root route handler"""
-    return redirect(url_for('analytics_dashboard', chat_id="-4684354099"))
+    try:
+        logger.info("Redirecting to module management interface")
+        return redirect('/module-management')  # Use direct path instead of url_for
+    except Exception as e:
+        logger.error(f"Error in root route: {str(e)}", exc_info=True)
+        return "Error: Could not load module management interface", 500
 
 if __name__ == "__main__":
     # Ensure the server is accessible externally
