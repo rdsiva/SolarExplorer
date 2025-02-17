@@ -5,6 +5,7 @@ import nest_asyncio
 from flask import Flask
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
+from telegram.error import NetworkError, TelegramError
 from config import TELEGRAM_BOT_TOKEN
 from modules import (
     ModuleManager,
@@ -27,30 +28,154 @@ def init_flask_app():
     app.config['SECRET_KEY'] = os.environ.get('SESSION_SECRET', 'dev-secret-key')
     return app
 
-async def run_bot():
-    """Run the bot with proper async handling"""
+async def init_modules(application):
+    """Initialize all modules"""
     try:
-        # Initialize application
-        application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+        module_manager = ModuleManager()
+        logger.info("Initializing modules...")
 
-        # Set up basic command handlers
-        application.add_handler(CommandHandler("start", lambda u, c: u.message.reply_text("Bot is starting...")))
+        # Initialize required modules first
+        price_module = get_price_monitor_module()()
+        if not await price_module.initialize():
+            raise Exception("Failed to initialize price monitor module")
+        module_manager.register_module(price_module)
+        module_manager.enable_module("price_monitor")
+        logger.info("Price monitor module initialized and enabled")
 
-        # Start the bot
-        await application.initialize()
-        await application.start()
-        await application.run_polling()
+        # Initialize dashboard module
+        dashboard_module = get_dashboard_module()()
+        if not await dashboard_module.initialize():
+            logger.warning("Dashboard module initialization failed, continuing without dashboard")
+        else:
+            module_manager.register_module(dashboard_module)
+            module_manager.enable_module("dashboard")
+            logger.info("Dashboard module initialized and enabled")
+
+        # Initialize optional modules with error handling
+        try:
+            pattern_module = get_pattern_analysis_module()()
+            await pattern_module.initialize()
+            module_manager.register_module(pattern_module)
+            logger.info("Pattern analysis module initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize pattern analysis module: {e}")
+
+        try:
+            ml_module = get_ml_prediction_module()()
+            await ml_module.initialize()
+            module_manager.register_module(ml_module)
+            logger.info("ML prediction module initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize ML module: {e}")
+
+        return module_manager
+    except Exception as e:
+        logger.error(f"Critical error during module initialization: {e}")
+        raise
+
+async def cmd_modules(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """List all available modules and their status"""
+    try:
+        module_manager = context.bot_data.get('module_manager')
+        if not module_manager:
+            await update.message.reply_text("Module system is not initialized")
+            return
+
+        modules = module_manager.get_all_modules()
+        message = "📊 Available Modules:\n\n"
+
+        # List required modules first
+        required_modules = [m for m in modules if m["name"] in ["price_monitor", "dashboard"]]
+        optional_modules = [m for m in modules if m["name"] not in ["price_monitor", "dashboard"]]
+
+        for idx, module in enumerate(required_modules, 1):
+            status = "✅ Always Enabled (Required)"
+            message += (
+                f"{idx}. {module['name'].replace('_', ' ').title()} 🔒\n"
+                f"   • Status: {status}\n"
+                f"   • Description: {module['description']}\n\n"
+            )
+
+        # Then list optional modules
+        for idx, module in enumerate(optional_modules, len(required_modules) + 1):
+            status = "✅ Enabled" if module["enabled"] else "❌ Disabled"
+            message += (
+                f"{idx}. {module['name'].replace('_', ' ').title()} (Optional)\n"
+                f"   • Status: {status}\n"
+                f"   • Description: {module['description']}\n\n"
+            )
+
+        message += "\nNote: Use /enable <module> to enable a module or /disable <module> to disable it."
+        message += "\nRequired modules cannot be disabled."
+
+        await update.message.reply_text(message)
 
     except Exception as e:
-        logger.error(f"Error running bot: {str(e)}", exc_info=True)
-        raise
-    finally:
-        if 'application' in locals():
-            await application.stop()
+        logger.error(f"Error listing modules: {e}")
+        await update.message.reply_text("Sorry, there was an error listing the modules.")
+
+async def run_bot():
+    """Run the bot with proper async handling and retry logic"""
+    retry_count = 0
+    max_retries = 3
+    retry_delay = 5  # seconds
+
+    while retry_count < max_retries:
+        try:
+            # Initialize application with proper error handling
+            application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+
+            # Initialize modules
+            module_manager = await init_modules(application)
+            application.bot_data['module_manager'] = module_manager
+
+            # Set up command handlers
+            application.add_handler(CommandHandler("start", lambda u, c: u.message.reply_text(
+                "👋 Welcome to the Energy Price Monitor Bot!\n\n"
+                "Available commands:\n"
+                "/check - Check current prices\n"
+                "/modules - List available modules\n"
+                "/enable <module_name> - Enable a specific module\n"
+                "/disable <module_name> - Disable a specific module\n"
+                "/preferences - Show your current preferences\n"
+                "/web - Open web management interface\n"
+                "/help - Show this help message"
+            )))
+            application.add_handler(CommandHandler("modules", cmd_modules))
+
+            # Start the bot with proper initialization
+            await application.initialize()
+            await application.start()
+            await application.run_polling(drop_pending_updates=True)
+            break  # If we get here, the bot is running successfully
+
+        except NetworkError as e:
+            retry_count += 1
+            logger.error(f"Network error (attempt {retry_count}/{max_retries}): {e}")
+            if retry_count < max_retries:
+                logger.info(f"Retrying in {retry_delay} seconds...")
+                await asyncio.sleep(retry_delay)
+            else:
+                logger.error("Max retries reached, giving up")
+                raise
+
+        except Exception as e:
+            logger.error(f"Critical error running bot: {e}", exc_info=True)
+            raise
+
+        finally:
+            if 'application' in locals():
+                try:
+                    await application.stop()
+                except Exception as e:
+                    logger.error(f"Error stopping application: {e}")
 
 def main():
     """Start the bot with proper error handling"""
     try:
+        if not TELEGRAM_BOT_TOKEN:
+            raise ValueError("TELEGRAM_BOT_TOKEN environment variable is not set")
+
         # Use nest_asyncio to allow nested event loops
         nest_asyncio.apply()
 
@@ -71,13 +196,17 @@ def main():
         loop.run_until_complete(run_bot())
     except KeyboardInterrupt:
         logger.info("Bot stopped by user")
+    except ValueError as e:
+        logger.critical(f"Configuration error: {e}", exc_info=True)
+        raise
     except Exception as e:
-        logger.critical(f"Bot failed to start: {str(e)}", exc_info=True)
+        logger.critical(f"Bot failed to start: {e}", exc_info=True)
+        raise
     finally:
         try:
             loop.close()
         except Exception as e:
-            logger.error(f"Error closing event loop: {str(e)}")
+            logger.error(f"Error closing event loop: {e}")
 
 if __name__ == '__main__':
     main()

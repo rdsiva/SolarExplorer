@@ -18,6 +18,11 @@ class PriceMonitorModule(BaseModule):
         self.last_price = None
         self.last_update = None
         self.provider = "ComEd"  # Default provider
+        self.api_endpoints = {
+            "hourly": "https://hourlypricing.comed.com/api?type=currenthouraverage",
+            "5min": "https://hourlypricing.comed.com/api?type=5minutefeed",
+            "daily": "https://hourlypricing.comed.com/api?type=day"
+        }
 
     async def initialize(self) -> bool:
         """Initialize price monitoring"""
@@ -33,11 +38,30 @@ class PriceMonitorModule(BaseModule):
         """Update price data from provider"""
         try:
             logger.info("Attempting to update price data")
-            # For testing, we'll use a mock price until the actual API is integrated
-            self.last_price = 3.5  # Example price
-            self.last_update = datetime.utcnow()
-            logger.info(f"Updated price data: {self.last_price}¢ at {self.last_update}")
-            return True
+
+            # Try to get current hour average first
+            response = requests.get(self.api_endpoints["hourly"])
+            if response.status_code == 200:
+                data = response.json()
+                if isinstance(data, list) and len(data) > 0:
+                    self.last_price = float(data[0].get('price', 0))
+                    self.last_update = datetime.utcnow()
+                    logger.info(f"Updated price data: {self.last_price}¢ at {self.last_update}")
+                    return True
+
+            # If hourly fails, try 5-minute data
+            response = requests.get(self.api_endpoints["5min"])
+            if response.status_code == 200:
+                data = response.json()
+                if isinstance(data, list) and len(data) > 0:
+                    self.last_price = float(data[0].get('price', 0))
+                    self.last_update = datetime.utcnow()
+                    logger.info(f"Updated price data from 5min feed: {self.last_price}¢ at {self.last_update}")
+                    return True
+
+            logger.error("Failed to fetch price data from all endpoints")
+            return False
+
         except Exception as e:
             logger.error(f"Error updating price data: {str(e)}")
             return False
@@ -56,13 +80,21 @@ class PriceMonitorModule(BaseModule):
                 logger.error(error_msg)
                 raise ModuleError(error_msg)
 
+            # Get additional data for comprehensive price info
+            hourly_response = requests.get(self.api_endpoints["hourly"])
+            five_min_response = requests.get(self.api_endpoints["5min"])
+
             result = {
                 "status": "success",
-                "price": self.last_price,
-                "timestamp": self.last_update.isoformat() if self.last_update else None
+                "current_price": self.last_price,
+                "timestamp": self.last_update.isoformat() if self.last_update else None,
+                "hourly_data": hourly_response.json() if hourly_response.status_code == 200 else [],
+                "five_min_data": five_min_response.json() if five_min_response.status_code == 200 else []
             }
+
             logger.info(f"Successfully processed price data: {result}")
             return result
+
         except Exception as e:
             error_msg = f"Unexpected error: {str(e)}"
             logger.error(error_msg)
@@ -84,10 +116,35 @@ class PriceMonitorModule(BaseModule):
                 "current_price": round(self.last_price, 2),
                 "time": self.last_update.strftime('%Y-%m-%d %H:%M:%S') if self.last_update else "N/A",
                 "status": "active",
-                "provider": self.provider
+                "provider": self.provider,
+                "alert_threshold": self.config.get("alert_threshold", 3.0)  # Default threshold
             }
+
+            # Add additional data from enabled modules through ModuleManager
+            if hasattr(self, '_bot') and self._bot:
+                module_manager = getattr(self._bot.application, 'module_manager', None)
+                if module_manager:
+                    enabled_modules = module_manager.get_enabled_modules()
+
+                    # Add pattern analysis data if enabled
+                    if "pattern_analysis" in enabled_modules:
+                        pattern_module = module_manager.get_module("pattern_analysis")
+                        if pattern_module:
+                            pattern_data = await pattern_module.get_notification_data()
+                            if pattern_data:
+                                result["patterns"] = pattern_data
+
+                    # Add ML prediction data if enabled
+                    if "ml_prediction" in enabled_modules:
+                        ml_module = module_manager.get_module("ml_prediction")
+                        if ml_module:
+                            ml_data = await ml_module.get_notification_data()
+                            if ml_data:
+                                result["predictions"] = ml_data
+
             logger.info(f"Successfully prepared notification data: {result}")
             return result
+
         except Exception as e:
             logger.error(f"Error getting notification data: {str(e)}")
             return None
