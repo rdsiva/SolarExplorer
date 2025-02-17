@@ -21,43 +21,30 @@ class TeslaAPI:
         self.access_token = None
         self.refresh_token = None
         self.state = None
+        self.callback_url = "https://1a8446b3-198e-4458-9e5f-60fa0a94ff1f-00-1nh6gkpmzmrcg.janeway.replit.dev/tesla/oauth/callback"
 
-        # Log the callback URL during initialization with a prominent banner
-        try:
-            repl_owner = os.environ.get("REPL_OWNER", "")
-            repl_slug = os.environ.get("REPL_SLUG", "")
-            base_callback_url = f"https://{repl_slug}.{repl_owner}.repl.co/tesla/oauth/callback"
-
-            log_banner("TESLA OAUTH CONFIGURATION")
-            logger.info("Add this callback URL to your Tesla Developer Console:")
-            logger.info(f"Callback URL: {base_callback_url}")
-            logger.info("\nIMPORTANT: Use this exact URL in Tesla app settings")
-            logger.info("Make sure to add it without any additional parameters")
-
-        except Exception as e:
-            logger.error(f"Error generating callback URL during initialization: {str(e)}")
+        # Log the callback URL during initialization
+        log_banner("TESLA OAUTH CONFIGURATION")
+        logger.info("Using the following callback URL in Tesla Developer Console:")
+        logger.info(f"Callback URL: {self.callback_url}")
+        logger.info("\nIMPORTANT: Use this exact URL in Tesla app settings")
 
     def generate_auth_url(self, chat_id: str) -> str:
         """Generate OAuth authorization URL"""
         logger.info(f"Generating auth URL for chat_id: {chat_id}")
 
         try:
-            self.state = str(uuid.uuid4())
-            logger.info(f"Generated OAuth state: {self.state}")
-
-            # Generate base callback URL using public Replit domain
-            repl_owner = os.environ.get("REPL_OWNER", "")
-            repl_slug = os.environ.get("REPL_SLUG", "")
-            base_callback_url = f"https://{repl_slug}.{repl_owner}.repl.co/tesla/oauth/callback"
-            logger.info(f"Using public callback URL: {base_callback_url}")
+            # Generate state that includes the chat_id
+            state_uuid = str(uuid.uuid4())
+            self.state = f"{state_uuid}_{chat_id}"
+            logger.info(f"Generated OAuth state with chat_id: {self.state}")
 
             params = {
                 'client_id': self.client_id,
-                'redirect_uri': base_callback_url,
+                'redirect_uri': self.callback_url,
                 'response_type': 'code',
                 'scope': 'openid email offline_access vehicle_device_data vehicle_cmds',
-                'state': self.state,
-                'chat_id': chat_id  # Add chat_id as a separate parameter
+                'state': self.state
             }
 
             auth_url = f"{self.oauth_url}/authorize"
@@ -73,18 +60,14 @@ class TeslaAPI:
     def exchange_code_for_token(self, code: str, state: str) -> dict:
         """Exchange authorization code for access token"""
         token_url = f"{self.oauth_url}/token"
-
-        # Get the Replit domain for the callback URL
-        repl_owner = os.environ.get("REPL_OWNER", "")
-        repl_slug = os.environ.get("REPL_SLUG", "")
-        callback_url = f"https://{repl_slug}.{repl_owner}.repl.co/tesla/oauth/callback"
+        logger.info(f"Using callback URL for token exchange: {self.callback_url}")
 
         data = {
             'grant_type': 'authorization_code',
             'client_id': self.client_id,
             'client_secret': self.client_secret,
             'code': code,
-            'redirect_uri': callback_url
+            'redirect_uri': self.callback_url
         }
 
         try:

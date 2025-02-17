@@ -213,23 +213,32 @@ def tesla_oauth_callback():
     try:
         code = request.args.get('code')
         state = request.args.get('state')
-        chat_id = request.args.get('chat_id')
 
-        logger.info(f"Received OAuth callback with parameters: code={bool(code)}, state={bool(state)}, chat_id={chat_id}")
+        logger.info(f"Received OAuth callback with parameters: code={bool(code)}, state={bool(state)}")
 
-        if not all([code, state, chat_id]):
+        if not all([code, state]):
             missing_params = []
             if not code:
                 missing_params.append('code')
             if not state:
                 missing_params.append('state')
-            if not chat_id:
-                missing_params.append('chat_id')
 
             error_msg = f"Missing required OAuth parameters: {', '.join(missing_params)}"
             logger.error(error_msg)
             return render_template('error.html', 
                 message=error_msg), 400
+
+        # Extract chat_id from state parameter
+        try:
+            state_parts = state.split('_')
+            if len(state_parts) != 2:
+                raise ValueError("Invalid state format")
+            state_uuid, chat_id = state_parts
+            logger.info(f"Extracted chat_id from state: {chat_id}")
+        except Exception as e:
+            logger.error(f"Failed to extract chat_id from state: {str(e)}")
+            return render_template('error.html',
+                message="Invalid state parameter format"), 400
 
         # Verify state matches stored state
         prefs = TeslaPreferences.get_preferences(chat_id)
@@ -261,11 +270,10 @@ def tesla_oauth_callback():
             refresh_token=result['refresh_token']
         )
 
-        # Redirect to success page
-        repl_owner = os.environ.get("REPL_OWNER", "")
-        repl_slug = os.environ.get("REPL_SLUG", "")
-        success_url = f"https://{repl_slug}.{repl_owner}.repl.co/tesla/success"
+        # Redirect to success page using the same domain as the callback URL
+        success_url = "https://1a8446b3-198e-4458-9e5f-60fa0a94ff1f-00-1nh6gkpmzmrcg.janeway.replit.dev/tesla/success"
         logger.info(f"OAuth flow completed successfully for chat_id: {chat_id}")
+        logger.info(f"Redirecting to success URL: {success_url}")
         return redirect(success_url)
 
     except Exception as e:
@@ -283,8 +291,10 @@ def tesla_success():
 def test_tesla_callback():
     """Test endpoint to verify Tesla OAuth callback is properly registered"""
     logger.info("Tesla callback test endpoint accessed")
+    callback_url = "https://1a8446b3-198e-4458-9e5f-60fa0a94ff1f-00-1nh6gkpmzmrcg.janeway.replit.dev/tesla/oauth/callback"
+    logger.info(f"Generated callback URL: {callback_url}")
     return jsonify({
         'status': 'success',
         'message': 'Tesla OAuth callback test endpoint is accessible',
-        'callback_url': url_for('tesla_oauth_callback', _external=True)
+        'callback_url': callback_url
     })
