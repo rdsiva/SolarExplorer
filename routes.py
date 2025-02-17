@@ -4,6 +4,9 @@ import numpy as np
 from app import app
 from providers.comed_provider import ComedProvider
 from models import UserPreferences, UserAnalytics, SavingsInsight, PriceHistory
+import logging
+
+logger = logging.getLogger(__name__)
 
 price_provider = ComedProvider()
 
@@ -48,40 +51,54 @@ def analytics_dashboard(chat_id):
     try:
         # Get or create user preferences
         with app.app_context():
-            user_prefs = UserPreferences.get_user_preferences(chat_id)
-            if not user_prefs:
-                user_prefs = UserPreferences.create_or_update(
-                    chat_id=chat_id,
-                    price_threshold=3.0,  # Default threshold
-                    alert_frequency='immediate'
-                )
+            try:
+                user_prefs = UserPreferences.get_user_preferences(chat_id)
+                if not user_prefs:
+                    user_prefs = UserPreferences.create_or_update(
+                        chat_id=chat_id,
+                        price_threshold=3.0,  # Default threshold
+                        alert_frequency='immediate'
+                    )
+            except Exception as db_error:
+                logger.error(f"Database error while accessing user preferences: {str(db_error)}")
+                return render_template('error.html', 
+                    message="Unable to access user preferences. Please try again later."), 500
 
         # Get latest analytics and price history
-        analytics = UserAnalytics.query.filter_by(chat_id=chat_id)\
-            .order_by(UserAnalytics.timestamp.desc())\
-            .first()
+        try:
+            analytics = UserAnalytics.query.filter_by(chat_id=chat_id)\
+                .order_by(UserAnalytics.timestamp.desc())\
+                .first()
 
-        price_history = PriceHistory.get_recent_history(
-            provider="ComEd",
-            hours=24 * 7  # Last week of data
-        )
+            price_history = PriceHistory.get_recent_history(
+                provider="ComEd",
+                hours=24 * 7  # Last week of data
+            )
+        except Exception as data_error:
+            logger.error(f"Error fetching analytics data: {str(data_error)}")
+            return render_template('error.html', 
+                message="Unable to fetch analytics data. Please try again later."), 500
 
-        # Generate new insights based on current data
-        from utils.analytics_helper import generate_savings_insights, calculate_weekly_savings_potential
+        # Generate insights
+        try:
+            from utils.analytics_helper import generate_savings_insights, calculate_weekly_savings_potential
+            new_insights = generate_savings_insights(chat_id, price_history)
+            weekly_savings = calculate_weekly_savings_potential(price_history)
 
-        new_insights = generate_savings_insights(chat_id, price_history)
-        weekly_savings = calculate_weekly_savings_potential(price_history)
-
-        # Store new insights
-        with app.app_context():
-            for insight in new_insights:
-                SavingsInsight.add_insight(
-                    chat_id=chat_id,
-                    potential_savings=insight['savings'],
-                    recommendation_type=insight['type'],
-                    description=insight['description'],
-                    impact_score=insight['impact_score']
-                )
+            # Store new insights
+            with app.app_context():
+                for insight in new_insights:
+                    SavingsInsight.add_insight(
+                        chat_id=chat_id,
+                        potential_savings=insight['savings'],
+                        recommendation_type=insight['type'],
+                        description=insight['description'],
+                        impact_score=insight['impact_score']
+                    )
+        except Exception as insight_error:
+            logger.error(f"Error generating insights: {str(insight_error)}")
+            weekly_savings = 0.0
+            new_insights = []
 
         # Get all insights for display
         insights = SavingsInsight.get_user_insights(chat_id, days=30)
@@ -140,7 +157,9 @@ def analytics_dashboard(chat_id):
         )
 
     except Exception as e:
-        return render_template('error.html', message=str(e)), 500
+        logger.error(f"Dashboard error: {str(e)}", exc_info=True)
+        return render_template('error.html', 
+            message="An error occurred while loading the dashboard. Please try again later."), 500
 
 @app.route('/api/analytics/<chat_id>')
 def get_user_analytics(chat_id):

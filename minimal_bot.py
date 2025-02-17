@@ -219,7 +219,7 @@ async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Add dashboard link with proper MarkdownV2 escaping
         dashboard_url = "https://" + os.environ.get("REPL_SLUG", "0-0-0-0") + ".repl.co/dashboard/" + str(chat_id)
-        message_parts.append(f"\n\n📈 [View Your Analytics Dashboard]({dashboard_url})")
+        message_parts.append(f"\n\n📈 [View Your Analytics Dashboard]({escape_markdown(dashboard_url)})")
 
         # Combine all parts with proper line endings
         message = "\n".join(message_parts)
