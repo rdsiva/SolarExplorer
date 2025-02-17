@@ -1,0 +1,25 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - price-monitor-deployment.yaml
+  - ml-prediction-deployment.yaml
+  - pattern-analysis-deployment.yaml
+
+configMapGenerator:
+  - name: app-config
+    literals:
+      - ENVIRONMENT=production
+
+secretGenerator:
+  - name: app-secrets
+    envs:
+      - .env
+
+images:
+  - name: ${REGISTRY}/price-monitor
+    newTag: latest
+  - name: ${REGISTRY}/ml-prediction
+    newTag: latest
+  - name: ${REGISTRY}/pattern-analysis
+    newTag: latest

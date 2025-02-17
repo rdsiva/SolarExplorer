@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pattern-analysis
+  labels:
+    app: pattern-analysis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pattern-analysis
+  template:
+    metadata:
+      labels:
+        app: pattern-analysis
+    spec:
+      containers:
+      - name: pattern-analysis
+        image: ${REGISTRY}/pattern-analysis:latest
+        envFrom:
+        - secretRef:
+            name: app-secrets
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 5000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pattern-analysis-service
+spec:
+  selector:
+    app: pattern-analysis
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 5000
+  type: ClusterIP

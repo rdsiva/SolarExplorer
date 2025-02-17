@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ml-prediction
+  labels:
+    app: ml-prediction
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ml-prediction
+  template:
+    metadata:
+      labels:
+        app: ml-prediction
+    spec:
+      containers:
+      - name: ml-prediction
+        image: ${REGISTRY}/ml-prediction:latest
+        envFrom:
+        - secretRef:
+            name: app-secrets
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "200m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 5000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ml-prediction-service
+spec:
+  selector:
+    app: ml-prediction
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 5000
+  type: ClusterIP
