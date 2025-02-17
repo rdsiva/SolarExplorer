@@ -31,10 +31,6 @@ args = "Test Agents"
 task = "workflow.run"
 args = "Price Data Scheduler"
 
-[[workflows.workflow.tasks]]
-task = "workflow.run"
-args = "Simple ComEd Bot"
-
 [[workflows.workflow]]
 name = "Telegram Price Monitor"
 author = "agent"
@@ -47,7 +43,7 @@ task = "packager.installForAll"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "python test_telegram_alerts.py"
+args = "python minimal_bot.py"
 
 [[workflows.workflow]]
 name = "Flask Server"
@@ -91,20 +87,6 @@ task = "packager.installForAll"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "python price_scheduler.py"
-
-[[workflows.workflow]]
-name = "Simple ComEd Bot"
-author = "agent"
-
-[workflows.workflow.metadata]
-agentRequireRestartOnSave = false
-
-[[workflows.workflow.tasks]]
-task = "packager.installForAll"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "python -m simple_approach.bot"
 
 [[ports]]
 localPort = 5000

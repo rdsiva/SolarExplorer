@@ -10,6 +10,7 @@ from config import TELEGRAM_BOT_TOKEN
 from models import PriceHistory, UserPreferences
 from app import app, db
 import numpy as np
+from price_prediction import price_predictor
 
 # Configure logging
 logging.basicConfig(
@@ -34,9 +35,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"👋 Welcome to the Energy Price Monitor Bot!\n\n"
         f"Your Chat ID is: {chat_id}\n"
         "Available commands:\n"
-        "/check_price - Check current prices\n"
-        "/set_threshold - Set custom price alert threshold\n"
-        "/show_preferences - Show your current preferences\n"
+        "/check - Check current prices\n"
+        "/threshold - Set custom price alert threshold\n"
+        "/preferences - Show your current preferences\n"
         "/help - Show this help message"
     )
     await update.message.reply_text(welcome_message)
@@ -102,11 +103,11 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Operation cancelled.")
     return ConversationHandler.END
 
-async def check_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Check current prices when the command /check_price is issued."""
+async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Check current prices with ML predictions"""
     try:
         chat_id = update.effective_chat.id
-        await update.message.reply_text("🔍 Checking current prices...")
+        await update.message.reply_text("🔍 Checking current prices with ML analysis...")
 
         # Get price data
         hourly_data = await PriceMonitor.check_hourly_price()
@@ -117,9 +118,21 @@ async def check_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
             prefs = UserPreferences.get_user_preferences(str(chat_id))
             threshold = prefs.price_threshold if prefs else 3.0
 
-        # Generate prediction
+        # Generate ML-based prediction
         current_price = float(hourly_data.get('price', 0))
         predicted_price, confidence = calculate_prediction(current_price, hourly_data)
+
+        # Get prediction range from ML model
+        prediction = price_predictor.predict(current_price)
+        prediction_range = prediction['range']
+
+        # Enhanced prediction data with ML insights
+        prediction_data = {
+            'short_term_prediction': predicted_price,
+            'confidence': confidence,
+            'trend': prediction['trend'],
+            'next_hour_range': prediction_range
+        }
 
         # Store prediction in database
         price_record = None
@@ -128,35 +141,46 @@ async def check_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 price_record = PriceHistory(
                     hourly_price=current_price,
                     predicted_price=predicted_price,
-                    prediction_confidence=confidence
+                    prediction_confidence=confidence,
+                    provider="ComEd"  # Ensure provider is set for ML training
                 )
                 db.session.add(price_record)
                 db.session.commit()
-                logger.info(f"Stored prediction record with ID: {price_record.id}")
+                logger.info(f"Stored ML prediction record with ID: {price_record.id}")
             except Exception as db_error:
-                logger.error(f"Database error while storing prediction: {str(db_error)}", exc_info=True)
+                logger.error(f"Database error while storing prediction: {str(db_error)}")
                 db.session.rollback()
 
-        # Format message with prediction and threshold info
+        # Format message with enhanced ML predictions
         message = "📊 Current Energy Prices:\n\n"
         message += f"5-min price: {five_min_data.get('price', 'N/A')}¢\n"
         message += f"Hourly price: {hourly_data.get('price', 'N/A')}¢\n"
         message += f"Your Alert Threshold: {threshold}¢\n"
-        message += f"Status: {'🔴 Above' if current_price > threshold else '🟢 Below'} threshold\n"
-        message += f"Trend: {hourly_data.get('trend', 'unknown').capitalize()}\n\n"
 
-        # Add prediction section
-        message += "🔮 Price Prediction:\n"
-        message += f"Next hour: {predicted_price}¢\n"
-        message += f"Confidence: {confidence}%\n\n"
+        # Add smart price alert based on ML prediction
+        if predicted_price > threshold:
+            message += f"⚠️ Warning: ML model predicts price will exceed your threshold!\n"
+            message += f"Expected to reach {predicted_price:.1f}¢ (Confidence: {confidence}%)\n"
+        elif current_price > threshold:
+            message += f"🔴 Currently Above Threshold\n"
+        else:
+            message += f"🟢 Below Threshold\n"
+
+        message += f"Trend: {prediction['trend'].capitalize()}\n\n"
+
+        # Add ML prediction section
+        message += "🤖 ML Price Prediction:\n"
+        message += f"Next hour: {predicted_price:.1f}¢\n"
+        message += f"Range: {prediction_range['low']:.1f}¢ - {prediction_range['high']:.1f}¢\n"
+        message += f"Confidence: {confidence}%\n"
 
         # Add timestamp
         cst_time = datetime.now(ZoneInfo("America/Chicago"))
-        message += f"⏰ Last Updated: {cst_time.strftime('%Y-%m-%d %I:%M %p %Z')}"
+        message += f"\n⏰ Last Updated: {cst_time.strftime('%Y-%m-%d %I:%M %p %Z')}"
 
-        # Add feedback request and buttons if prediction was stored successfully
+        # Add feedback request if prediction was stored
         if price_record and price_record.id:
-            message += "\n\n🎯 Help us improve! Was this prediction accurate?"
+            message += "\n\n🎯 Help us improve! Was this ML prediction accurate?"
             keyboard = [
                 [
                     InlineKeyboardButton("✅ Accurate", callback_data=f"feedback_accurate_{price_record.id}"),
@@ -170,7 +194,7 @@ async def check_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         error_msg = f"❌ Error checking prices: {str(e)}"
-        logger.error(error_msg, exc_info=True)
+        logger.error(error_msg)
         await update.message.reply_text(error_msg)
 
 async def handle_prediction_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -210,50 +234,16 @@ async def handle_prediction_feedback(update: Update, context: ContextTypes.DEFAU
         )
 
 def calculate_prediction(current_price: float, hourly_data: dict) -> tuple[float, int]:
-    """Calculate price prediction using historical data and trends"""
+    """Calculate price prediction using ML model"""
     try:
-        day_ahead_price = float(hourly_data.get('day_ahead_price', current_price))
-        trend = hourly_data.get('trend', 'stable')
+        # Use ML model for prediction
+        prediction = price_predictor.predict(current_price)
 
-        with app.app_context():
-            # Get recent price history
-            recent_prices = PriceHistory.query.order_by(
-                PriceHistory.timestamp.desc()
-            ).limit(24).all()
-
-            if recent_prices:
-                # Calculate trend-based adjustment
-                trend_factor = 1.0
-                if trend == 'rising':
-                    trend_factor = 1.05
-                elif trend == 'falling':
-                    trend_factor = 0.95
-
-                # Calculate weighted average of recent prices
-                weights = np.array([0.8 ** i for i in range(len(recent_prices))])
-                weights = weights / weights.sum()
-                historical_prices = np.array([p.hourly_price for p in recent_prices])
-                weighted_historical = np.average(historical_prices, weights=weights)
-
-                # Combine current price, day-ahead price, and historical data
-                prediction = (
-                    0.4 * current_price +
-                    0.3 * day_ahead_price +
-                    0.3 * weighted_historical
-                ) * trend_factor
-
-                # Calculate confidence based on prediction accuracy history
-                accurate_predictions = len([p for p in recent_prices if p.prediction_accuracy == 1.0])
-                total_predictions = len([p for p in recent_prices if p.prediction_accuracy is not None])
-                confidence = int((accurate_predictions / total_predictions * 100) if total_predictions > 0 else 75)
-
-                return round(prediction, 1), confidence
-
+        return prediction['predicted_price'], prediction['confidence']
     except Exception as e:
-        logger.error(f"Error calculating prediction: {str(e)}", exc_info=True)
-
-    # Fallback to simple prediction if anything fails
-    return round(current_price * 1.05, 1), 60
+        logger.error(f"Error calculating ML prediction: {str(e)}")
+        # Fallback to simple prediction
+        return round(current_price * 1.05, 1), 60
 
 
 def main():
@@ -264,18 +254,18 @@ def main():
 
         # Add conversation handler for setting threshold
         conv_handler = ConversationHandler(
-            entry_points=[CommandHandler('set_threshold', set_threshold)],
+            entry_points=[CommandHandler('threshold', set_threshold)],
             states={
                 THRESHOLD: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_threshold)],
             },
             fallbacks=[CommandHandler('cancel', cancel)],
         )
 
-        # Add handlers
+        # Add handlers with updated command names
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CommandHandler("help", help_command))
-        application.add_handler(CommandHandler("check_price", check_price))
-        application.add_handler(CommandHandler("show_preferences", show_preferences))
+        application.add_handler(CommandHandler("check", check))
+        application.add_handler(CommandHandler("preferences", show_preferences))
         application.add_handler(conv_handler)
         application.add_handler(CallbackQueryHandler(handle_prediction_feedback))
 
