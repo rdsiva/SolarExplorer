@@ -75,37 +75,30 @@ def analytics_dashboard(chat_id):
             price_history = PriceHistory.get_recent_history(
                 provider="ComEd",
                 hours=24 * 7  # Last week of data
-            )
+            ) or []  # Default to empty list if no data
         except Exception as data_error:
             logger.error(f"Error fetching analytics data: {str(data_error)}")
-            return render_template('error.html', 
-                message="Unable to fetch analytics data. Please try again later."), 500
+            analytics = None
+            price_history = []
 
-        # Generate insights
+        # Generate insights or use defaults
         try:
             from utils.analytics_helper import generate_savings_insights, calculate_weekly_savings_potential
             new_insights = generate_savings_insights(chat_id, price_history)
             weekly_savings = calculate_weekly_savings_potential(price_history)
-
-            # Store new insights
-            with app.app_context():
-                for insight in new_insights:
-                    SavingsInsight.add_insight(
-                        chat_id=chat_id,
-                        potential_savings=insight['savings'],
-                        recommendation_type=insight['type'],
-                        description=insight['description'],
-                        impact_score=insight['impact_score']
-                    )
         except Exception as insight_error:
             logger.error(f"Error generating insights: {str(insight_error)}")
             weekly_savings = 0.0
             new_insights = []
 
         # Get all insights for display
-        insights = SavingsInsight.get_user_insights(chat_id, days=30)
+        try:
+            insights = SavingsInsight.get_user_insights(chat_id, days=30) or []
+        except Exception as insight_fetch_error:
+            logger.error(f"Error fetching insights: {str(insight_fetch_error)}")
+            insights = []
 
-        # Calculate stats
+        # Calculate stats with safe defaults
         daily_stats = {}
         hourly_stats = {}
         if price_history:
@@ -120,7 +113,7 @@ def analytics_dashboard(chat_id):
             for day in daily_stats:
                 prices = daily_stats[day]
                 daily_stats[day] = {
-                    'average': round(np.mean(prices), 2),
+                    'average': round(sum(prices) / len(prices), 2),
                     'min': round(min(prices), 2),
                     'max': round(max(prices), 2)
                 }
@@ -136,12 +129,12 @@ def analytics_dashboard(chat_id):
             for hour in hourly_stats:
                 prices = hourly_stats[hour]
                 hourly_stats[hour] = {
-                    'average': round(np.mean(prices), 2),
+                    'average': round(sum(prices) / len(prices), 2),
                     'min': round(min(prices), 2),
                     'max': round(max(prices), 2)
                 }
 
-        # Find optimal usage times
+        # Find optimal usage times (safely handle empty data)
         best_hours = sorted(hourly_stats.items(), key=lambda x: x[1]['average'])[:3] if hourly_stats else []
         worst_hours = sorted(hourly_stats.items(), key=lambda x: x[1]['average'], reverse=True)[:3] if hourly_stats else []
 
@@ -155,7 +148,8 @@ def analytics_dashboard(chat_id):
             hourly_stats=hourly_stats,
             best_hours=best_hours,
             worst_hours=worst_hours,
-            weekly_savings_potential=weekly_savings
+            weekly_savings_potential=weekly_savings,
+            has_data=bool(price_history)  # Add flag for template
         )
 
     except Exception as e:

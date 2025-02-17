@@ -1,11 +1,9 @@
 import os
 from flask import Flask, render_template, jsonify, request
-from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy.orm import DeclarativeBase
-from modules import ModuleManager, PriceMonitorModule, PatternAnalysisModule, MLPredictionModule, DashboardModule
 import logging
 from datetime import datetime, timedelta
 import random
+from database import db, init_db
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -14,11 +12,7 @@ logger = logging.getLogger(__name__)
 # Log initialization start
 logger.info("Starting Flask application initialization...")
 
-class Base(DeclarativeBase):
-    pass
-
 try:
-    db = SQLAlchemy(model_class=Base)
     app = Flask(__name__)
 
     # Log environment variables (without sensitive data)
@@ -38,6 +32,21 @@ try:
         "pool_pre_ping": True,
     }
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+
+    # Register Jinja2 filters
+    def format_datetime(value, format='%Y-%m-%d %H:%M:%S'):
+        if value is None:
+            return ''
+        return value.strftime(format)
+
+    app.jinja_env.filters['strftime'] = format_datetime
+
+    # Initialize database first
+    logger.info("Initializing database...")
+    init_db(app)
+
+    # After database is initialized, import and set up modules
+    from modules import ModuleManager, PriceMonitorModule, PatternAnalysisModule, MLPredictionModule, DashboardModule
 
     # Initialize the module manager
     logger.info("Initializing ModuleManager...")
@@ -61,9 +70,6 @@ try:
     # Enable dashboard module by default
     logger.info("Enabling dashboard module...")
     module_manager.enable_module("dashboard")
-
-    logger.info("Initializing database...")
-    db.init_app(app)
 
     @app.route('/module-management')
     def module_management():
@@ -166,13 +172,6 @@ try:
         except Exception as e:
             logger.error(f"Error toggling module {module_name}: {str(e)}", exc_info=True)
             return jsonify({'success': False, 'message': str(e)}), 500
-
-    # Create database tables
-    logger.info("Creating database tables...")
-    with app.app_context():
-        import models
-        db.create_all()
-        logger.info("Database tables created successfully")
 
     logger.info("Flask application initialization completed")
 

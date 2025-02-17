@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-from app import db
+from database import db
 from typing import List, Optional, TYPE_CHECKING
 import numpy as np
 from flask_login import UserMixin

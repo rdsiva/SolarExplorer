@@ -2,6 +2,8 @@ import logging
 from typing import Dict, Any, Optional
 from datetime import datetime, timedelta
 from .base_module import BaseModule
+from database import db
+from models import PriceHistory
 
 logger = logging.getLogger(__name__)
 
@@ -20,20 +22,46 @@ class DashboardModule(BaseModule):
             'price_alerts_sent': 0,
             'price_trends': []
         }
+        self.latest_price_data = None
 
     async def initialize(self) -> bool:
         """Initialize dashboard module"""
         try:
             logger.info("Initializing dashboard module")
             await self._reset_daily_metrics()
+            # Load initial price data
+            self._load_latest_price_data()
             return True
         except Exception as e:
             logger.error(f"Failed to initialize dashboard: {str(e)}")
             return False
 
+    def _load_latest_price_data(self):
+        """Load the latest price data from database"""
+        try:
+            latest_record = PriceHistory.query.order_by(
+                PriceHistory.timestamp.desc()
+            ).first()
+
+            if latest_record:
+                self.latest_price_data = {
+                    'price': latest_record.hourly_price,
+                    'timestamp': latest_record.timestamp,
+                    'trend': 'stable'  # Default trend
+                }
+                logger.info(f"Loaded latest price data: {self.latest_price_data}")
+            else:
+                logger.warning("No price history data found")
+        except Exception as e:
+            logger.error(f"Error loading price data: {str(e)}")
+
     async def process(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Process dashboard data and update metrics"""
         try:
+            if 'price_data' in data:
+                self.latest_price_data = data['price_data']
+                logger.info(f"Updated latest price data: {self.latest_price_data}")
+
             if 'user_activity' in data:
                 self.metrics['active_users'] += 1
 
@@ -51,12 +79,13 @@ class DashboardModule(BaseModule):
 
             if 'price_alert' in data:
                 self.metrics['price_alerts_sent'] += 1
-                self.metrics['price_trends'].append({
-                    'timestamp': datetime.now().isoformat(),
-                    'price': data['price_alert'].get('price', 0)
-                })
-                # Keep only last 24 hours of price trends
-                self._cleanup_price_trends()
+                if self.latest_price_data:
+                    self.metrics['price_trends'].append({
+                        'timestamp': self.latest_price_data['timestamp'].isoformat(),
+                        'price': self.latest_price_data['price']
+                    })
+                    # Keep only last 24 hours of price trends
+                    self._cleanup_price_trends()
 
             return {
                 "status": "success",
@@ -73,7 +102,11 @@ class DashboardModule(BaseModule):
     async def get_notification_data(self) -> Optional[Dict[str, Any]]:
         """Get dashboard data for notifications"""
         try:
+            if not self.latest_price_data:
+                self._load_latest_price_data()
+
             return {
+                "current_price": self.latest_price_data['price'] if self.latest_price_data else None,
                 "active_users": self.metrics['active_users'],
                 "total_predictions": self.metrics['total_predictions'],
                 "accuracy_rate": round(self.metrics['accuracy_rate'] * 100, 2),
