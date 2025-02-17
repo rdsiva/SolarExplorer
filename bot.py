@@ -21,35 +21,22 @@ logger = logging.getLogger(__name__)
 
 # Initialize Flask app
 app = Flask(__name__)
-CORS(app, resources={
-    r"/telegram/*": {"origins": "*"},
-    r"/health": {"origins": "*"}
-})
+CORS(app)
 app.config['SECRET_KEY'] = os.environ.get('SESSION_SECRET', 'dev-secret-key')
 
-# Get domain from environment or use Replit domain
+# Get domain for webhook
 REPLIT_DOMAIN = os.environ.get('REPLIT_DOMAIN')
-CUSTOM_DOMAIN = os.environ.get('PUBLIC_URL', '').strip().rstrip('/')
+PUBLIC_URL = os.environ.get('PUBLIC_URL')
 
-# Determine the public URL
-if CUSTOM_DOMAIN:
-    # If custom domain provided, ensure it has proper scheme
-    if not CUSTOM_DOMAIN.startswith(('http://', 'https://')):
-        PUBLIC_URL = f"https://{CUSTOM_DOMAIN}"
-    else:
-        PUBLIC_URL = CUSTOM_DOMAIN
-elif REPLIT_DOMAIN:
-    # Use Replit's domain if available
-    PUBLIC_URL = f"https://{REPLIT_DOMAIN}"
+# Determine webhook URL
+if REPLIT_DOMAIN:
+    WEBHOOK_BASE_URL = f"https://{REPLIT_DOMAIN}"
+elif PUBLIC_URL:
+    WEBHOOK_BASE_URL = PUBLIC_URL if PUBLIC_URL.startswith(('http://', 'https://')) else f"https://{PUBLIC_URL}"
 else:
-    raise ValueError("No valid domain available. Set PUBLIC_URL or use Replit's domain.")
+    raise ValueError("No valid domain available. Set REPLIT_DOMAIN or PUBLIC_URL environment variable.")
 
-# Validate URL format
-parsed_url = urlparse(PUBLIC_URL)
-if not all([parsed_url.scheme, parsed_url.netloc]):
-    raise ValueError(f"Invalid URL format: {PUBLIC_URL}")
-
-logger.info(f"Using webhook URL base: {PUBLIC_URL}")
+logger.info(f"Using webhook URL base: {WEBHOOK_BASE_URL}")
 
 # Initialize bot at module level
 application = None
@@ -57,7 +44,7 @@ application = None
 async def setup_webhook(app_instance: Application):
     """Set up webhook for receiving updates"""
     try:
-        webhook_url = f"{PUBLIC_URL}/telegram/webhook"
+        webhook_url = f"{WEBHOOK_BASE_URL}/telegram/webhook"
         logger.info(f"Setting up webhook at {webhook_url}")
 
         # Get current webhook info
@@ -176,6 +163,12 @@ def create_app():
     global application
 
     try:
+        # Verify bot token
+        if not TELEGRAM_BOT_TOKEN:
+            raise ValueError("TELEGRAM_BOT_TOKEN environment variable is not set")
+
+        logger.info("Starting bot initialization...")
+
         # Enable nested asyncio for handling async operations
         nest_asyncio.apply()
 
@@ -192,9 +185,14 @@ def create_app():
 
         # Initialize the application and set up webhook
         loop.run_until_complete(application.initialize())
-        loop.run_until_complete(setup_webhook(application))
+        success = loop.run_until_complete(setup_webhook(application))
 
-        logger.info(f"Bot initialized successfully: @{application.bot.username}")
+        if not success:
+            raise ValueError("Failed to set up webhook")
+
+        # Verify bot info
+        bot_info = loop.run_until_complete(application.bot.get_me())
+        logger.info(f"Bot initialized successfully: @{bot_info.username}")
 
         return app
 
