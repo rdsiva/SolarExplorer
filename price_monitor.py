@@ -9,7 +9,22 @@ logger = logging.getLogger(__name__)
 
 class PriceMonitor:
     @staticmethod
+    def clean_price_string(price_str):
+        """Clean price string by removing '¢' symbol and converting to float"""
+        try:
+            # Remove '¢' symbol and any whitespace
+            cleaned = price_str.replace('¢', '').strip()
+            return float(cleaned)
+        except (ValueError, AttributeError) as e:
+            logger.error(f"Error cleaning price string '{price_str}': {str(e)}")
+            raise ValueError(f"Invalid price format: {price_str}")
+
+    @staticmethod
     def format_price_message(price, time, price_type="current", additional_info=None):
+        # Convert price to float if it's a string
+        if isinstance(price, str):
+            price = PriceMonitor.clean_price_string(price)
+
         status = "below" if float(price) <= MIN_RATE else "above"
         message = (
             f"🔔 The Comed {price_type} price is {status} {MIN_RATE} cents!\n"
@@ -31,11 +46,13 @@ class PriceMonitor:
                 raise ValueError("Empty response from five minute price API")
 
             price_data = data[0]
+            cleaned_price = PriceMonitor.clean_price_string(price_data['price'])
+
             return {
-                'price': price_data['price'],
+                'price': cleaned_price,
                 'time': price_data['LocalTimeinCST'],
                 'message': PriceMonitor.format_price_message(
-                    price_data['price'],
+                    cleaned_price,
                     price_data['LocalTimeinCST'],
                     "5-minute"
                 )
@@ -49,10 +66,11 @@ class PriceMonitor:
         try:
             cst_now = datetime.now(ZoneInfo("America/Chicago"))
             today_date = cst_now.strftime("%Y%m%d")
-            logger.debug(f"Querying hourly price for CST date: {today_date}")
+            logger.info(f"Current time in CST: {cst_now.strftime('%Y-%m-%d %I:%M %p %Z')}")
+            logger.info(f"Using queryDate parameter: {today_date}")
 
             api_url = f"{HOURLY_PRICE_URL}?queryDate={today_date}"
-            logger.debug(f"Making API request to: {api_url}")
+            logger.info(f"Making API request to: {api_url}")
 
             response = requests.get(api_url)
             response.raise_for_status()
@@ -62,7 +80,7 @@ class PriceMonitor:
                 raise ValueError("Empty response from hourly price API")
 
             current_time = cst_now.strftime("%I:00 %p")
-            logger.debug(f"Looking for hourly price at CST time: {current_time}")
+            logger.info(f"Looking for hourly price at CST time: {current_time}")
             logger.debug(f"API response contains {len(data)} records")
 
             current_data = [
@@ -78,13 +96,15 @@ class PriceMonitor:
                 raise ValueError(f"No data found for current hour: {current_time}")
 
             hour_data = current_data[0]
-            additional_info = f"Day Ahead Price: {hour_data['DayAheadPrice']} cents"
+            cleaned_price = PriceMonitor.clean_price_string(hour_data['RealTimePrice'])
+            cleaned_day_ahead = PriceMonitor.clean_price_string(hour_data['DayAheadPrice'])
+            additional_info = f"Day Ahead Price: {cleaned_day_ahead} cents"
 
             return {
-                'price': hour_data['RealTimePrice'],
+                'price': cleaned_price,
                 'time': hour_data['DateTime'],
                 'message': PriceMonitor.format_price_message(
-                    hour_data['RealTimePrice'],
+                    cleaned_price,
                     hour_data['DateTime'],
                     "hourly",
                     additional_info
