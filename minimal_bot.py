@@ -159,7 +159,7 @@ async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Format message with ML predictions and patterns
         message = "📊 Current Energy Prices:\n\n"
-        message += f"5-min price: {five_min_data.get('price', 'N/A')}¢\n"
+        message += f"5\\-min price: {five_min_data.get('price', 'N/A')}¢\n"
         message += f"Hourly price: {current_price:.2f}¢\n"
         message += f"Your Alert Threshold: {threshold}¢\n"
 
@@ -180,8 +180,8 @@ async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Add smart price alert based on ML prediction
         if predicted_price > threshold:
-            message += f"\n⚠️ Warning: ML model predicts price will exceed your threshold!\n"
-            message += f"Expected to reach {predicted_price:.1f}¢ (Confidence: {confidence}%)\n"
+            message += f"\n⚠️ Warning: ML model predicts price will exceed your threshold\\!\n"
+            message += f"Expected to reach {predicted_price:.1f}¢ \\(Confidence: {confidence}%\\)\n"
         elif current_price > threshold:
             message += f"\n🔴 Currently Above Threshold\n"
         else:
@@ -192,26 +192,35 @@ async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Add ML prediction section
         message += "\n🤖 ML Price Prediction:\n"
         message += f"Next hour: {predicted_price:.1f}¢\n"
-        message += f"Range: {prediction_range['low']:.1f}¢ - {prediction_range['high']:.1f}¢\n"
+        message += f"Range: {prediction_range['low']:.1f}¢ \\- {prediction_range['high']:.1f}¢\n"
         message += f"Confidence: {confidence}%\n"
 
         # Add timestamp
         cst_time = datetime.now(ZoneInfo("America/Chicago"))
         message += f"\n⏰ Last Updated: {cst_time.strftime('%Y-%m-%d %I:%M %p %Z')}"
 
+        # Add dashboard link with proper MarkdownV2 escaping
+        dashboard_url = f"http://0\\.0\\.0\\.0:5000/dashboard/{chat_id}"
+        message += f"\n\n📈 [View Your Analytics Dashboard]({dashboard_url})"
+
         # Add feedback request if prediction was stored
         if price_record and price_record.id:
-            message += "\n\n🎯 Help us improve! Was this ML prediction accurate?"
-            keyboard = [
-                [
-                    InlineKeyboardButton("✅ Accurate", callback_data=f"feedback_accurate_{price_record.id}"),
-                    InlineKeyboardButton("❌ Inaccurate", callback_data=f"feedback_inaccurate_{price_record.id}")
-                ]
-            ]
+            message += "\n\n🎯 Help us improve\\! Was this ML prediction accurate?"
+            keyboard = [[
+                InlineKeyboardButton("✅ Good", callback_data=f"feedback_accurate_{price_record.id}"),
+                InlineKeyboardButton("❌ Poor", callback_data=f"feedback_inaccurate_{price_record.id}")
+            ]]
             reply_markup = InlineKeyboardMarkup(keyboard)
-            await update.message.reply_text(message, reply_markup=reply_markup)
+            await update.message.reply_text(
+                message,
+                parse_mode="MarkdownV2",
+                reply_markup=reply_markup
+            )
         else:
-            await update.message.reply_text(message)
+            await update.message.reply_text(
+                message,
+                parse_mode="MarkdownV2"
+            )
 
     except Exception as e:
         error_msg = f"❌ Error checking prices: {str(e)}"
@@ -233,7 +242,7 @@ async def handle_prediction_feedback(update: Update, context: ContextTypes.DEFAU
         with app.app_context():
             try:
                 success = PriceHistory.update_prediction_accuracy(int(record_id), accuracy)
-                feedback_msg = "✅ Thank you for your feedback!" if success else "❌ Couldn't process feedback"
+                feedback_msg = "✅ Thank you for your feedback\\!" if success else "❌ Couldn't process feedback"
                 logger.info(f"Feedback processing {'successful' if success else 'failed'}")
             except Exception as db_error:
                 logger.error(f"Database error while processing feedback: {str(db_error)}", exc_info=True)
@@ -243,7 +252,8 @@ async def handle_prediction_feedback(update: Update, context: ContextTypes.DEFAU
         await query.edit_message_reply_markup(reply_markup=None)
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text=feedback_msg
+            text=feedback_msg,
+            parse_mode="MarkdownV2"
         )
         logger.info("Feedback confirmation sent to user")
 
@@ -251,7 +261,8 @@ async def handle_prediction_feedback(update: Update, context: ContextTypes.DEFAU
         logger.error(f"Error processing prediction feedback: {str(e)}", exc_info=True)
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text="❌ Sorry, there was an error processing your feedback."
+            text="❌ Sorry, there was an error processing your feedback\\.",
+            parse_mode="MarkdownV2"
         )
 
 def main():
