@@ -12,7 +12,6 @@ from modules import (
     get_price_monitor_module
 )
 from asgiref.sync import sync_to_async
-import socket
 
 # Configure logging
 logging.basicConfig(
@@ -34,35 +33,41 @@ if not PUBLIC_URL:
 # Initialize bot at module level
 application = None
 
-def is_port_in_use(port):
-    """Check if a port is in use"""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        try:
-            s.bind(('0.0.0.0', port))
-            return False
-        except socket.error:
-            return True
-        finally:
-            s.close()
-
 async def setup_webhook(app_instance: Application):
     """Set up webhook for receiving updates"""
     try:
-        webhook_url = f"{PUBLIC_URL}/telegram-webhook"
+        webhook_url = f"{PUBLIC_URL}/webhook"
+        logger.info(f"Setting up webhook at {webhook_url}")
+
+        # Get current webhook info
         webhook_info = await app_instance.bot.get_webhook_info()
+        logger.info(f"Current webhook info: {webhook_info.url}")
 
-        # Delete existing webhook
-        logger.info("Deleting existing webhook if any...")
-        await app_instance.bot.delete_webhook()
+        # Always delete existing webhook first
+        logger.info("Removing existing webhook...")
+        await app_instance.bot.delete_webhook(drop_pending_updates=True)
 
-        # Set new webhook
-        logger.info(f"Setting webhook to {webhook_url}")
-        await app_instance.bot.set_webhook(url=webhook_url)
+        # Wait to ensure webhook is fully deleted
+        await asyncio.sleep(2)
 
-        # Verify webhook was set
+        # Set new webhook with proper parameters
+        logger.info(f"Setting new webhook to {webhook_url}")
+        success = await app_instance.bot.set_webhook(
+            url=webhook_url,
+            allowed_updates=['message', 'callback_query'],
+            drop_pending_updates=True,
+            max_connections=100
+        )
+
+        if not success:
+            raise Exception("Failed to set webhook")
+
+        # Verify webhook was set correctly
         webhook_info = await app_instance.bot.get_webhook_info()
+        logger.info(f"New webhook info: {webhook_info.url}")
+
         if webhook_info.url != webhook_url:
-            raise Exception("Webhook URL verification failed")
+            raise Exception(f"Webhook verification failed. Expected {webhook_url}, got {webhook_info.url}")
 
         logger.info("Webhook setup completed successfully")
         return True
@@ -71,18 +76,19 @@ async def setup_webhook(app_instance: Application):
         logger.error(f"Failed to set up webhook: {e}", exc_info=True)
         return False
 
-@app.route('/telegram-webhook', methods=['POST'])
-async def telegram_webhook():
+@app.route('/webhook', methods=['POST'])
+async def webhook():
     """Handle incoming webhook updates from Telegram"""
     try:
         if not application:
             logger.error("Application not initialized")
             return jsonify({'status': 'error', 'message': 'Bot not initialized'}), 500
 
+        # Log incoming update
         update_data = request.get_json()
         logger.debug(f"Received webhook update: {update_data}")
 
-        # Process update in async context
+        # Process update
         update = Update.de_json(update_data, application.bot)
         await application.process_update(update)
 
@@ -98,13 +104,16 @@ def health_check():
     try:
         if not application:
             return jsonify({'status': 'error', 'message': 'Bot not initialized'}), 503
+
+        webhook_info = asyncio.run(application.bot.get_webhook_info())
         return jsonify({
             'status': 'ok',
             'bot_username': application.bot.username,
-            'webhook_url': f"{PUBLIC_URL}/telegram-webhook"
+            'webhook_url': webhook_info.url,
+            'pending_updates': webhook_info.pending_update_count
         })
     except Exception as e:
-        logger.error(f"Health check failed: {e}")
+        logger.error(f"Health check failed: {e}", exc_info=True)
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -128,6 +137,38 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(help_message)
 
+async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Check current prices and send a test response"""
+    try:
+        module_manager = context.bot_data.get('module_manager')
+        if not module_manager:
+            await update.message.reply_text("Module system is not initialized")
+            return
+
+        # Get price monitor data
+        price_module = module_manager.get_module("price_monitor")
+        if not price_module:
+            await update.message.reply_text("Price monitor module is not available")
+            return
+
+        price_data = await price_module.get_notification_data()
+        if not price_data:
+            await update.message.reply_text("Unable to fetch price data")
+            return
+
+        # Format response message
+        message = "📊 Current Energy Price:\n\n"
+        message += f"Price: {price_data.get('current_price', 'N/A')}\n"
+        message += f"Time: {price_data.get('time', 'N/A')}"
+
+        await update.message.reply_text(message)
+        logger.info(f"Successfully processed /check command for user {update.effective_user.id}")
+
+    except Exception as e:
+        error_msg = f"Error checking prices: {str(e)}"
+        logger.error(error_msg)
+        await update.message.reply_text("Sorry, there was an error processing your request.")
+
 async def init_telegram_bot():
     """Initialize the Telegram bot with webhook support"""
     try:
@@ -146,6 +187,7 @@ async def init_telegram_bot():
         # Register command handlers
         application.add_handler(CommandHandler("start", cmd_start))
         application.add_handler(CommandHandler("help", cmd_help))
+        application.add_handler(CommandHandler("check", cmd_check))
 
         # Set up webhook
         if not await setup_webhook(application):
@@ -206,9 +248,6 @@ def create_app():
 def main():
     """Main function to run the bot"""
     try:
-        if is_port_in_use(5000):
-            raise Exception("Port 5000 is already in use")
-
         logger.info("Starting bot server...")
         app = create_app()
 
@@ -218,7 +257,7 @@ def main():
 
         config = Config()
         config.bind = ["0.0.0.0:5000"]
-        config.workers = 1
+        config.workers = 1  # Single worker to avoid webhook conflicts
         config.worker_class = "asyncio"
 
         asyncio.run(serve(app, config))
