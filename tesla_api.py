@@ -6,6 +6,12 @@ from flask import url_for
 
 logger = logging.getLogger(__name__)
 
+def log_banner(message):
+    """Helper function to create visible log banners"""
+    logger.info("\n" + "=" * 80)
+    logger.info(message.center(78))
+    logger.info("=" * 80 + "\n")
+
 class TeslaAPI:
     def __init__(self):
         self.api_base_url = "https://owner-api.teslamotors.com/api/1"
@@ -16,18 +22,18 @@ class TeslaAPI:
         self.refresh_token = None
         self.state = None
 
-        # Log the callback URL during initialization
+        # Log the callback URL during initialization with a prominent banner
         try:
             repl_owner = os.environ.get("REPL_OWNER", "")
             repl_slug = os.environ.get("REPL_SLUG", "")
             base_callback_url = f"https://{repl_slug}.{repl_owner}.repl.co/tesla/oauth/callback"
 
-            logger.info("=" * 80)
-            logger.info("Tesla OAuth Configuration")
-            logger.info("=" * 80)
+            log_banner("TESLA OAUTH CONFIGURATION")
             logger.info("Add this callback URL to your Tesla Developer Console:")
             logger.info(f"Callback URL: {base_callback_url}")
-            logger.info("=" * 80)
+            logger.info("\nIMPORTANT: Use this exact URL in Tesla app settings")
+            logger.info("Make sure to add it without any additional parameters")
+
         except Exception as e:
             logger.error(f"Error generating callback URL during initialization: {str(e)}")
 
