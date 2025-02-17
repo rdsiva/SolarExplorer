@@ -324,11 +324,17 @@ class EnergyPriceBot:
         except Exception as e:
             logger.error(f"Error running bot: {str(e)}")
             raise
+        finally:
+            # Only attempt to stop if the application was started
+            if self.application.running:
+                await self.application.stop()
 
 if __name__ == '__main__':
     try:
         bot = EnergyPriceBot()
         asyncio.run(bot.run())
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user")
     except Exception as e:
         logger.critical(f"Bot failed to start: {str(e)}")
         raise
