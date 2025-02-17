@@ -218,7 +218,9 @@ async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message_parts.append(f"\n⏰ Last Updated: {escape_markdown(cst_time.strftime('%Y-%m-%d %I:%M %p %Z'))}")
 
         # Add dashboard link with proper MarkdownV2 escaping
-        dashboard_url = "https://" + os.environ.get("REPL_SLUG", "0-0-0-0") + ".repl.co/dashboard/" + str(chat_id)
+        repl_slug = os.environ.get("REPL_SLUG", "")
+        repl_owner = os.environ.get("REPL_OWNER", "")
+        dashboard_url = f"https://{repl_slug}.{repl_owner}.repl.co/dashboard/{chat_id}"
         message_parts.append(f"\n\n📈 [View Your Analytics Dashboard]({escape_markdown(dashboard_url)})")
 
         # Combine all parts with proper line endings
