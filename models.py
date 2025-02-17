@@ -67,3 +67,38 @@ class PriceHistory(db.Model):
             PriceHistory.timestamp >= cutoff_time,
             PriceHistory.prediction_accuracy.isnot(None)
         ).order_by(PriceHistory.timestamp.desc()).all()
+
+class UserPreferences(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    chat_id = db.Column(db.String(100), unique=True, nullable=False)
+    price_threshold = db.Column(db.Float, nullable=False, default=3.0)  # Default threshold
+    alert_frequency = db.Column(db.String(20), nullable=False, default='immediate')  # immediate, hourly, daily
+    start_time = db.Column(db.Time, nullable=True)  # Start of alert window
+    end_time = db.Column(db.Time, nullable=True)  # End of alert window
+    is_active = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def __repr__(self):
+        return f'<UserPreferences chat_id={self.chat_id}, threshold={self.price_threshold}>'
+
+    @staticmethod
+    def get_user_preferences(chat_id: str) -> Optional["UserPreferences"]:
+        """Get preferences for a specific user"""
+        return UserPreferences.query.filter_by(chat_id=str(chat_id)).first()
+
+    @staticmethod
+    def create_or_update(chat_id: str, **kwargs) -> "UserPreferences":
+        """Create or update user preferences"""
+        prefs = UserPreferences.get_user_preferences(str(chat_id))
+        if not prefs:
+            prefs = UserPreferences(chat_id=str(chat_id))
+            db.session.add(prefs)
+
+        # Update fields if provided
+        for key, value in kwargs.items():
+            if hasattr(prefs, key):
+                setattr(prefs, key, value)
+
+        db.session.commit()
+        return prefs
