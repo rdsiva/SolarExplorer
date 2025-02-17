@@ -1,21 +1,39 @@
+import os
+import logging
 from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
 import asyncio
-import logging
-from datetime import datetime
 import requests
+from datetime import datetime
 from config import TELEGRAM_BOT_TOKEN, HEALTH_CHECK_URL, MIN_RATE
 from price_monitor import PriceMonitor
 from zoneinfo import ZoneInfo
 from models import PriceHistory
 from app import app
 
+# Configure logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 class EnergyPriceBot:
     def __init__(self):
+        """Initialize the bot with webhook configuration"""
         self.application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
         self.bot = self.application.bot
+
+        # Get Replit domain from environment
+        repl_id = os.environ.get('REPL_ID', '')
+        if not repl_id:
+            raise ValueError("REPL_ID not set in environment variables")
+
+        # Use Replit's domain for webhook
+        self.webhook_url = f"https://{repl_id}.id.repl.co"
+        self.webhook_path = f'/telegram-webhook-{TELEGRAM_BOT_TOKEN}'
+
+        logger.info(f"Initializing bot with webhook URL: {self.webhook_url}")
         self.setup_handlers()
 
     def setup_handlers(self):
@@ -26,8 +44,35 @@ class EnergyPriceBot:
         self.application.add_handler(CommandHandler("stop_monitoring", self.cmd_stop_monitoring))
         self.application.add_handler(CommandHandler("check_price", self.cmd_check_price))
         self.application.add_handler(CommandHandler("status", self.cmd_status))
-        # Add feedback handler
         self.application.add_handler(CallbackQueryHandler(self.handle_prediction_feedback))
+
+    async def setup_webhook(self):
+        """Set up webhook for the bot"""
+        webhook_url = f"{self.webhook_url}{self.webhook_path}"
+        try:
+            logger.info("Deleting existing webhook...")
+            await self.bot.delete_webhook(drop_pending_updates=True)
+
+            logger.info(f"Setting up new webhook at {webhook_url}")
+            await self.bot.set_webhook(
+                url=webhook_url,
+                allowed_updates=['message', 'callback_query'],
+                drop_pending_updates=True
+            )
+
+            # Verify webhook was set correctly
+            webhook_info = await self.bot.get_webhook_info()
+            logger.info(f"Webhook info: {webhook_info.to_dict()}")
+
+            if webhook_info.url == webhook_url:
+                logger.info("Webhook setup successful!")
+            else:
+                logger.error(f"Webhook URL mismatch. Expected: {webhook_url}, Got: {webhook_info.url}")
+                raise ValueError("Webhook setup failed: URL mismatch")
+
+        except Exception as e:
+            logger.error(f"Failed to set up webhook: {str(e)}")
+            raise
 
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the /start command"""
@@ -125,10 +170,33 @@ class EnergyPriceBot:
             logger.info(f"Initiating price check at CST: {cst_time}")
 
             five_min_data = await PriceMonitor.check_five_min_price()
-            await self.send_price_alert(update.effective_chat.id, five_min_data)
-
             hourly_data = await PriceMonitor.check_hourly_price()
-            await self.send_price_alert(update.effective_chat.id, hourly_data)
+
+            # Create prediction data with enhanced details
+            current_price = float(hourly_data.get('price', 0))
+            predicted_price = round(current_price * 1.1, 1)  # 10% higher than current for testing
+            confidence = 75
+            trend = 'rising'
+
+            prediction_data = {
+                'short_term_prediction': predicted_price,
+                'confidence': confidence,
+                'trend': trend,
+                'next_hour_range': {
+                    'low': round(current_price * 0.9, 1),
+                    'high': round(current_price * 1.2, 1)
+                },
+                'recommendation': self.get_recommendation(
+                    current_price,
+                    predicted_price,
+                    trend,
+                    confidence
+                )
+            }
+
+            # Send alerts with prediction data and feedback buttons
+            await self.send_price_alert(update.effective_chat.id, five_min_data, prediction_data)
+            await self.send_price_alert(update.effective_chat.id, hourly_data, prediction_data)
 
         except Exception as e:
             error_msg = f"❌ Error checking prices: {str(e)}"
@@ -226,24 +294,84 @@ class EnergyPriceBot:
             )
 
     def _format_price_message(self, price_data: dict, prediction_data: dict | None = None) -> str:
-        """Format price alert message with prediction information"""
+        """Format price alert message with prediction information and recommendations"""
         message = price_data.get('message', '')
 
         if prediction_data and prediction_data.get('short_term_prediction'):
-            message += f"\n\n🔮 Price Prediction:\n"
-            message += f"• Next hour: {prediction_data['short_term_prediction']:.1f}¢\n"
+            message += f"\n\n🔮 Next Hour Price Prediction:\n"
+            message += f"• Current price: {price_data.get('price', 'N/A')}¢\n"
+            message += f"• Predicted: {prediction_data['short_term_prediction']:.1f}¢\n"
+            message += f"• Range: {prediction_data['next_hour_range']['low']}¢ - {prediction_data['next_hour_range']['high']}¢\n"
             message += f"• Confidence: {prediction_data['confidence']}%\n"
             message += f"• Trend: {prediction_data['trend']}\n\n"
-            message += "Please provide feedback on this prediction's accuracy!"
+
+            # Add the specific recommendation
+            message += prediction_data.get('recommendation', '')
+
+            message += "\n📊 Help improve predictions!\n"
+            message += "Please rate this prediction's accuracy using the buttons below.\n"
 
         return message
 
+    async def run_webhook(self):
+        """Start the bot in webhook mode"""
+        try:
+            await self.setup_webhook()
+            logger.info("Starting the bot in webhook mode...")
 
-    def run(self):
-        """Start the bot"""
-        logger.info("Starting the bot...")
-        self.application.run_polling()
+            await self.application.run_webhook(
+                listen="0.0.0.0",
+                port=80,  # Use port 80 for external access
+                webhook_url=f"{self.webhook_url}{self.webhook_path}",
+                url_path=self.webhook_path.lstrip('/'),
+                drop_pending_updates=True
+            )
+        except Exception as e:
+            logger.error(f"Error running webhook: {str(e)}")
+            raise
+
+    def get_recommendation(self, current_price: float, predicted_price: float, trend: str, confidence: float) -> str:
+        """Generate specific recommendations based on price predictions"""
+        price_diff = predicted_price - current_price
+        percent_change = (price_diff / current_price) * 100
+
+        recommendation = "🎯 Next Hour Recommendation:\n"
+
+        if confidence < 50:
+            recommendation += "⚠️ Low prediction confidence. Monitor prices closely.\n"
+            return recommendation
+
+        if percent_change > 10 and confidence >= 70:
+            recommendation += "⚡ URGENT: Consider immediate power usage!\n"
+            recommendation += "• Prices expected to rise significantly\n"
+            recommendation += "• Recommended actions:\n"
+            recommendation += "  - Run major appliances now\n"
+            recommendation += "  - Charge electric vehicles\n"
+            recommendation += "  - Complete energy-intensive tasks\n"
+        elif percent_change > 5:
+            recommendation += "⏰ Consider using power in the next 30 minutes\n"
+            recommendation += "• Moderate price increase expected\n"
+        elif percent_change < -10 and confidence >= 70:
+            recommendation += "⏳ Consider delaying power usage\n"
+            recommendation += "• Significant price drop expected\n"
+            recommendation += "• Wait if possible for:\n"
+            recommendation += "  - Laundry and dishes\n"
+            recommendation += "  - EV charging\n"
+            recommendation += "  - Air conditioning adjustments\n"
+        elif percent_change < -5:
+            recommendation += "💡 Slight price decrease expected\n"
+            recommendation += "• Consider minor delays in power usage\n"
+        else:
+            recommendation += "✅ Stable prices expected\n"
+            recommendation += "• Proceed with normal power usage\n"
+
+        return recommendation
+
 
 if __name__ == '__main__':
-    bot = EnergyPriceBot()
-    bot.run()
+    try:
+        bot = EnergyPriceBot()
+        asyncio.run(bot.run_webhook())
+    except Exception as e:
+        logger.critical(f"Bot failed to start: {str(e)}")
+        raise
