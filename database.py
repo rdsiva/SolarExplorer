@@ -1,6 +1,7 @@
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.orm import DeclarativeBase
 import logging
+from flask import Flask
 
 logger = logging.getLogger(__name__)
 
@@ -10,7 +11,7 @@ class Base(DeclarativeBase):
 # Initialize SQLAlchemy with the Base class
 db = SQLAlchemy(model_class=Base)
 
-def init_db(app):
+def init_db(app: Flask):
     """Initialize the database with the Flask app"""
     try:
         logger.info("Initializing database connection...")
@@ -25,3 +26,7 @@ def init_db(app):
     except Exception as e:
         logger.error(f"Failed to initialize database: {str(e)}")
         raise
+
+def get_db():
+    """Get database instance"""
+    return db

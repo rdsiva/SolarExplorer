@@ -2,7 +2,7 @@ import logging
 from typing import Dict, Any, Optional
 from datetime import datetime, timedelta
 from .base_module import BaseModule
-from database import db
+from database import get_db
 from models import PriceHistory
 
 logger = logging.getLogger(__name__)
@@ -23,13 +23,13 @@ class DashboardModule(BaseModule):
             'price_trends': []
         }
         self.latest_price_data = None
+        self.db = get_db()
 
     async def initialize(self) -> bool:
         """Initialize dashboard module"""
         try:
             logger.info("Initializing dashboard module")
             await self._reset_daily_metrics()
-            # Load initial price data
             self._load_latest_price_data()
             return True
         except Exception as e:

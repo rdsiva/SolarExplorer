@@ -4,10 +4,13 @@ import requests
 import asyncio
 from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
-from config import TELEGRAM_BOT_TOKEN, HEALTH_CHECK_URL, MIN_RATE
+from config import TELEGRAM_BOT_TOKEN, HEALTH_CHECK_URL
 from modules import ModuleManager, PriceMonitorModule, PatternAnalysisModule, MLPredictionModule, DashboardModule, ModuleError
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from flask import Flask
+from app import app, db
+from models import UserPreferences
 
 # Configure logging
 logging.basicConfig(
@@ -35,27 +38,13 @@ class EnergyPriceBot:
             self.module_manager = ModuleManager()
             self._setup_modules()
 
-            # Set up admin notification callback
-            logger.info("Setting up admin notification callback...")
-            self.module_manager.set_notification_callback(self._send_admin_notification)
+            # Set up command handlers
+            self._setup_handlers()
 
             logger.info("Bot initialization completed successfully")
         except Exception as e:
             logger.error(f"Failed to initialize bot: {str(e)}")
             raise
-
-    async def _send_admin_notification(self, chat_id: str, message: str):
-        """Send notification to admin"""
-        try:
-            if not chat_id:
-                logger.warning("Admin chat ID not set, skipping notification")
-                return
-            await self.bot.send_message(
-                chat_id=chat_id,
-                text=f"🤖 Bot Admin Alert:\n{message}"
-            )
-        except Exception as e:
-            logger.error(f"Failed to send admin notification: {str(e)}")
 
     def _setup_modules(self):
         """Set up and register all available modules"""
@@ -94,59 +83,68 @@ class EnergyPriceBot:
     def _setup_handlers(self):
         """Set up command handlers for the bot"""
         try:
-            logger.info("Setting up command handlers")
+            logger.info("Setting up command handlers...")
             self.application.add_handler(CommandHandler("start", self.cmd_start))
             self.application.add_handler(CommandHandler("help", self.cmd_help))
-            self.application.add_handler(CommandHandler("check_price", self.cmd_check_price))
+            self.application.add_handler(CommandHandler("check", self.cmd_check_price))
             self.application.add_handler(CommandHandler("status", self.cmd_status))
             self.application.add_handler(CommandHandler("modules", self.cmd_modules))
             self.application.add_handler(CommandHandler("enable", self.cmd_enable_module))
             self.application.add_handler(CommandHandler("disable", self.cmd_disable_module))
+            self.application.add_handler(CommandHandler("preferences", self.cmd_preferences))
+            self.application.add_handler(CommandHandler("threshold", self.cmd_set_threshold))
             self.application.add_handler(CallbackQueryHandler(self.handle_prediction_feedback))
             logger.info("Command handlers setup completed")
         except Exception as e:
-            logger.error(f"Error setting up handlers: {str(e)}")
+            logger.error(f"Error setting up handlers: {e}")
             raise
 
     async def start(self):
         """Start the bot"""
         try:
             logger.info("Starting bot...")
-            self._setup_handlers()
-            logger.info("Initializing application...")
             await self.application.initialize()
-            logger.info("Starting application...")
             await self.application.start()
-            logger.info("Starting polling...")
-            await self.application.run_polling(drop_pending_updates=True)
+            await self.application.run_polling(allowed_updates=Update.ALL_TYPES)
         except Exception as e:
-            logger.error(f"Error starting bot: {str(e)}")
+            logger.error(f"Error starting bot: {e}")
             raise
 
     async def stop(self):
         """Stop the bot"""
-        if self.application.running:
-            await self.application.stop()
-            await self.application.shutdown()
+        try:
+            if self.application.running:
+                await self.application.stop()
+                await self.application.shutdown()
+        except Exception as e:
+            logger.error(f"Error stopping bot: {e}")
 
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle the /start command"""
+        """Send a message when the command /start is issued."""
         try:
             chat_id = update.effective_chat.id
             logger.info(f"Received /start command from chat_id: {chat_id}")
+
+            # Get Replit domain for web interface
+            repl_slug = os.environ.get("REPL_SLUG", "")
+            repl_owner = os.environ.get("REPL_OWNER", "")
+            web_url = f"https://{repl_slug}.{repl_owner}.repl.co/module-management"
+
             welcome_message = (
                 f"👋 Welcome to the Energy Price Monitor Bot!\n\n"
-                f"Your Chat ID is: {chat_id}\n\n"
-                f"🔍 Available Commands:\n"
-                f"1. Price Monitoring (Required Module):\n"
-                f"  • /check_price - Check current energy prices\n"
+                f"🔍 Available Commands:\n\n"
+                f"1. Price Monitoring:\n"
+                f"  • /check - Check current energy prices\n"
                 f"  • /status - View monitoring status\n\n"
                 f"2. Module Management:\n"
-                f"  • /modules - List all available modules\n\n"
-                f"3. Pattern Analysis (Optional Module):\n"
-                f"  • Provides volatility and trend analysis\n\n"
-                f"4. ML Predictions (Optional Module):\n"
-                f"  • Provides price predictions\n\n"
+                f"  • /modules - List all available modules\n"
+                f"  • /enable <module> - Enable a module\n"
+                f"  • /disable <module> - Disable a module\n\n"
+                f"3. Preferences:\n"
+                f"  • /preferences - View your settings\n"
+                f"  • /threshold - Set price alert threshold\n\n"
+                f"4. Web Management:\n"
+                f"  • Web Interface: {web_url}\n\n"
                 f"Type /help to see this message again."
             )
             await update.message.reply_text(welcome_message)
@@ -156,7 +154,7 @@ class EnergyPriceBot:
             await update.message.reply_text("Sorry, there was an error processing your command.")
 
     async def cmd_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle the /help command"""
+        """Show help information"""
         await self.cmd_start(update, context)
 
     async def cmd_modules(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -319,6 +317,19 @@ class EnergyPriceBot:
                     f"Critical bot error in check_price: {str(e)}"
                 )
 
+    async def _send_admin_notification(self, chat_id: str, message: str):
+        """Send notification to admin"""
+        try:
+            if not chat_id:
+                logger.warning("Admin chat ID not set, skipping notification")
+                return
+            await self.bot.send_message(
+                chat_id=chat_id,
+                text=f"🤖 Bot Admin Alert:\n{message}"
+            )
+        except Exception as e:
+            logger.error(f"Failed to send admin notification: {str(e)}")
+
     def _format_price_message(self, results: dict, notification_data: dict) -> str:
         """Format price message with data from enabled modules"""
         message = "📊 Energy Price Update\n\n"
@@ -408,19 +419,113 @@ class EnergyPriceBot:
         except:
             return False
 
-if __name__ == '__main__':
+    # Added command handlers for preferences and threshold
+    async def cmd_preferences(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show user preferences"""
+        try:
+            chat_id = update.effective_chat.id
+            logger.info(f"Showing preferences for chat_id: {chat_id}")
+
+            with app.app_context():
+                prefs = UserPreferences.get_user_preferences(str(chat_id))
+                if prefs:
+                    message = (
+                        "🔧 Your Current Preferences:\n\n"
+                        f"• Price Threshold: {prefs.price_threshold}¢\n"
+                        f"• Alert Frequency: {prefs.alert_frequency}\n"
+                        f"• Active: {'Yes' if prefs.is_active else 'No'}\n"
+                    )
+                    if prefs.start_time and prefs.end_time:
+                        message += f"• Alert Window: {prefs.start_time.strftime('%I:%M %p')} - {prefs.end_time.strftime('%I:%M %p')}"
+                else:
+                    message = (
+                        "❌ No preferences found.\n"
+                        "Use /threshold to set your price alert threshold."
+                    )
+
+            await update.message.reply_text(message)
+            logger.info(f"Sent preferences to chat_id: {chat_id}")
+
+        except Exception as e:
+            logger.error(f"Error showing preferences: {str(e)}")
+            await update.message.reply_text("Sorry, there was an error fetching your preferences.")
+
+    async def cmd_set_threshold(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Set price alert threshold"""
+        try:
+            chat_id = update.effective_chat.id
+            logger.info(f"Setting threshold for chat_id: {chat_id}")
+
+            # Check if a threshold value was provided
+            if not context.args:
+                await update.message.reply_text(
+                    "Please provide a threshold value in cents (e.g., /threshold 3.5)\n"
+                    "This is the price above which you'll receive alerts."
+                )
+                return
+
+            try:
+                threshold = float(context.args[0])
+                if threshold <= 0:
+                    await update.message.reply_text("❌ Threshold must be a positive number.")
+                    return
+
+                with app.app_context():
+                    prefs = UserPreferences.create_or_update(str(chat_id), price_threshold=threshold)
+
+                await update.message.reply_text(
+                    f"✅ Price threshold set to {threshold}¢\n"
+                    "You'll receive alerts when prices exceed this threshold."
+                )
+                logger.info(f"Set threshold to {threshold} for chat_id: {chat_id}")
+
+            except ValueError:
+                await update.message.reply_text(
+                    "❌ Please enter a valid number (e.g., 3.5)"
+                )
+
+        except Exception as e:
+            logger.error(f"Error setting threshold: {str(e)}")
+            await update.message.reply_text("Sorry, there was an error setting your threshold.")
+
+
+
+def main():
+    """Start the bot."""
     try:
-        # Ensure we only have one bot instance
+        # Create the bot instance
         logger.info("Starting new bot instance...")
         bot = EnergyPriceBot()
 
-        # Initialize modules before starting the bot
-        asyncio.run(bot.module_manager.initialize_modules())
+        # Initialize modules
+        logger.info("Initializing modules...")
+
+        # Set up asyncio event loop
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        # Initialize modules
+        loop.run_until_complete(bot.module_manager.initialize_modules())
 
         # Start the bot
-        asyncio.run(bot.start())
-    except KeyboardInterrupt:
-        logger.info("Bot stopped by user")
+        logger.info("Starting bot...")
+        loop.run_until_complete(bot.start())
+
+        # Run forever
+        try:
+            loop.run_forever()
+        except KeyboardInterrupt:
+            logger.info("Bot stopped by user")
+            loop.run_until_complete(bot.stop())
+        except Exception as e:
+            logger.error(f"Error in main loop: {e}")
+            raise
+        finally:
+            loop.close()
+
     except Exception as e:
         logger.critical(f"Bot failed to start: {str(e)}")
         raise
+
+if __name__ == '__main__':
+    main()
