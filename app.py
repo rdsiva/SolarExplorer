@@ -45,31 +45,43 @@ try:
     logger.info("Initializing database...")
     init_db(app)
 
-    # After database is initialized, import and set up modules
-    from modules import ModuleManager, PriceMonitorModule, PatternAnalysisModule, MLPredictionModule, DashboardModule
+    def init_modules():
+        """Initialize modules after app context is created"""
+        from modules import (
+            ModuleManager,
+            get_price_monitor_module,
+            get_pattern_analysis_module,
+            get_ml_prediction_module,
+            get_dashboard_module
+        )
 
-    # Initialize the module manager
-    logger.info("Initializing ModuleManager...")
-    module_manager = ModuleManager()
-    price_module = PriceMonitorModule()
-    pattern_module = PatternAnalysisModule()
-    ml_module = MLPredictionModule()
-    dashboard_module = DashboardModule()
+        # Initialize the module manager
+        logger.info("Initializing ModuleManager...")
+        module_manager = ModuleManager()
 
-    # Register modules
-    logger.info("Registering modules...")
-    module_manager.register_module(price_module)
-    module_manager.register_module(pattern_module)
-    module_manager.register_module(ml_module)
-    module_manager.register_module(dashboard_module)
+        # Initialize modules using factory functions
+        price_module = get_price_monitor_module()()
+        pattern_module = get_pattern_analysis_module()()
+        ml_module = get_ml_prediction_module()()
+        dashboard_module = get_dashboard_module()()
 
-    # Enable price monitoring by default (required)
-    logger.info("Enabling required price monitor module...")
-    module_manager.enable_module("price_monitor")
+        logger.info("Registering modules...")
+        module_manager.register_module(price_module)
+        module_manager.register_module(pattern_module)
+        module_manager.register_module(ml_module)
+        module_manager.register_module(dashboard_module)
 
-    # Enable dashboard module by default
-    logger.info("Enabling dashboard module...")
-    module_manager.enable_module("dashboard")
+        # Enable required modules
+        logger.info("Enabling required price monitor module...")
+        module_manager.enable_module("price_monitor")
+        logger.info("Enabling dashboard module...")
+        module_manager.enable_module("dashboard")
+
+        return module_manager
+
+    # Initialize modules after database setup
+    with app.app_context():
+        module_manager = init_modules()
 
     @app.route('/module-management')
     def module_management():

@@ -5,11 +5,17 @@ import asyncio
 from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
 from config import TELEGRAM_BOT_TOKEN, HEALTH_CHECK_URL
-from modules import ModuleManager, PriceMonitorModule, PatternAnalysisModule, MLPredictionModule, DashboardModule, ModuleError
+from modules import (
+    ModuleManager,
+    get_price_monitor_module,
+    get_pattern_analysis_module,
+    get_ml_prediction_module,
+    get_dashboard_module,
+    ModuleError
+)
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from flask import Flask
-from app import app, db
+from database import db, get_db
 from models import UserPreferences
 
 # Configure logging
@@ -29,59 +35,100 @@ class EnergyPriceBot:
                 logger.error("TELEGRAM_BOT_TOKEN is not set")
                 raise ValueError("TELEGRAM_BOT_TOKEN is not set")
 
-            logger.info("Building application with token...")
-            self.application = Application.builder().token(self.bot_token).build()
-            self.bot = self.application.bot
-
-            # Initialize module manager and register modules
+            # Initialize module manager
             logger.info("Initializing ModuleManager...")
             self.module_manager = ModuleManager()
-            self._setup_modules()
 
-            # Set up command handlers
-            self._setup_handlers()
+            # Store module initialization status
+            self.module_status = {}
 
-            logger.info("Bot initialization completed successfully")
+            # Admin chat ID for notifications
+            self.admin_chat_id = os.environ.get("ADMIN_CHAT_ID")
+
+            logger.info("Bot initialization completed")
         except Exception as e:
             logger.error(f"Failed to initialize bot: {str(e)}")
             raise
 
-    def _setup_modules(self):
-        """Set up and register all available modules"""
+    async def _init_telegram(self):
+        """Initialize Telegram application"""
+        try:
+            logger.info("Building application with token...")
+            self.application = Application.builder().token(self.bot_token).build()
+            self.bot = self.application.bot
+            self._setup_handlers()
+            return True
+        except Exception as e:
+            logger.error(f"Failed to initialize Telegram: {str(e)}")
+            return False
+
+    async def _setup_module(self, module_name: str, factory_func):
+        """Set up a single module with error handling"""
+        try:
+            module = factory_func()
+            self.module_manager.register_module(module)
+            if module_name in ["price_monitor", "dashboard"]:
+                self.module_manager.enable_module(module_name)
+            self.module_status[module_name] = True
+            logger.info(f"Module {module_name} initialized successfully")
+            return module
+        except Exception as e:
+            self.module_status[module_name] = False
+            error_msg = f"Failed to initialize {module_name} module: {str(e)}"
+            logger.error(error_msg)
+            await self._notify_admin(error_msg)
+            return None
+
+    async def _setup_modules(self):
+        """Set up all modules with independent error handling"""
         try:
             logger.info("Setting up modules...")
-            # Initialize modules
-            self.price_module = PriceMonitorModule()  # Required module
-            logger.info("Price monitor module initialized")
 
-            self.pattern_module = PatternAnalysisModule()  # Optional
-            logger.info("Pattern analysis module initialized")
+            # Initialize required price monitor module
+            self.price_module = await self._setup_module(
+                "price_monitor", 
+                get_price_monitor_module()
+            )
+            if not self.price_module:
+                raise ModuleError("Required price monitor module failed to initialize")
 
-            self.ml_module = MLPredictionModule()  # Optional
-            logger.info("ML prediction module initialized")
+            # Initialize optional modules
+            self.pattern_module = await self._setup_module(
+                "pattern_analysis",
+                get_pattern_analysis_module()
+            )
+            self.ml_module = await self._setup_module(
+                "ml_prediction",
+                get_ml_prediction_module()
+            )
+            self.dashboard_module = await self._setup_module(
+                "dashboard",
+                get_dashboard_module()
+            )
 
-            self.dashboard_module = DashboardModule()  # Optional
-            logger.info("Dashboard module initialized")
-
-            # Register modules
-            logger.info("Registering modules with manager...")
-            self.module_manager.register_module(self.price_module)
-            self.module_manager.register_module(self.pattern_module)
-            self.module_manager.register_module(self.ml_module)
-            self.module_manager.register_module(self.dashboard_module)
-
-            # Enable price monitoring by default (required)
-            logger.info("Enabling required modules...")
-            self.module_manager.enable_module("price_monitor")
-            self.module_manager.enable_module("dashboard")  # Enable dashboard by default
-
-            logger.info("Modules setup completed successfully")
+            logger.info("Modules setup completed")
+            await self._notify_admin("Bot modules initialization completed with status:\n" + 
+                                   "\n".join(f"{k}: {'✅' if v else '❌'}" 
+                                           for k, v in self.module_status.items()))
         except Exception as e:
-            logger.error(f"Error setting up modules: {str(e)}")
+            logger.error(f"Critical error in module setup: {str(e)}")
+            await self._notify_admin(f"Critical module setup error: {str(e)}")
             raise
 
+    async def _notify_admin(self, message: str):
+        """Send notification to admin if admin chat ID is set"""
+        if self.admin_chat_id:
+            try:
+                if hasattr(self, 'bot'):
+                    await self.bot.send_message(
+                        chat_id=self.admin_chat_id,
+                        text=f"🤖 Admin Alert:\n{message}"
+                    )
+            except Exception as e:
+                logger.error(f"Failed to send admin notification: {str(e)}")
+
     def _setup_handlers(self):
-        """Set up command handlers for the bot"""
+        """Set up command handlers"""
         try:
             logger.info("Setting up command handlers...")
             self.application.add_handler(CommandHandler("start", self.cmd_start))
@@ -96,28 +143,38 @@ class EnergyPriceBot:
             self.application.add_handler(CallbackQueryHandler(self.handle_prediction_feedback))
             logger.info("Command handlers setup completed")
         except Exception as e:
-            logger.error(f"Error setting up handlers: {e}")
+            logger.error(f"Error setting up handlers: {str(e)}")
             raise
 
     async def start(self):
-        """Start the bot"""
+        """Start the bot with proper initialization sequence"""
         try:
             logger.info("Starting bot...")
+            # Initialize Telegram first
+            if not await self._init_telegram():
+                raise RuntimeError("Failed to initialize Telegram")
+
+            # Initialize modules
+            await self._setup_modules()
+
+            # Start the application
             await self.application.initialize()
             await self.application.start()
-            await self.application.run_polling(allowed_updates=Update.ALL_TYPES)
+            await self.application.run_polling()
         except Exception as e:
-            logger.error(f"Error starting bot: {e}")
+            logger.error(f"Error starting bot: {str(e)}")
+            await self._notify_admin(f"Bot startup failed: {str(e)}")
             raise
 
     async def stop(self):
-        """Stop the bot"""
+        """Stop the bot gracefully"""
         try:
-            if self.application.running:
+            if hasattr(self, 'application') and self.application.running:
                 await self.application.stop()
                 await self.application.shutdown()
+                logger.info("Bot stopped successfully")
         except Exception as e:
-            logger.error(f"Error stopping bot: {e}")
+            logger.error(f"Error stopping bot: {str(e)}")
 
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Send a message when the command /start is issued."""
@@ -249,8 +306,7 @@ class EnergyPriceBot:
                     error_msg = "❌ Unable to fetch current prices. Please try again later."
                     logger.error("Price monitor returned no data")
                     await update.message.reply_text(error_msg)
-                    await self._send_admin_notification(
-                        self.module_manager.admin_chat_id,
+                    await self._notify_admin(
                         f"Price monitor failed to return data for chat_id: {chat_id}"
                     )
                     return
@@ -286,8 +342,7 @@ class EnergyPriceBot:
                 except Exception as module_error:
                     logger.error(f"Error processing optional modules: {str(module_error)}")
                     message += "\n⚠️ Some features are temporarily unavailable."
-                    await self._send_admin_notification(
-                        self.module_manager.admin_chat_id,
+                    await self._notify_admin(
                         f"Optional modules failed for chat_id {chat_id}: {str(module_error)}"
                     )
 
@@ -300,8 +355,7 @@ class EnergyPriceBot:
             except ModuleError as me:
                 error_msg = f"❌ {str(me)}"
                 logger.error(error_msg)
-                await self._send_admin_notification(
-                    self.module_manager.admin_chat_id,
+                await self._notify_admin(
                     f"Critical module error in price check: {str(me)}"
                 )
                 await update.message.reply_text(error_msg)
@@ -311,9 +365,8 @@ class EnergyPriceBot:
             await update.message.reply_text(
                 "❌ Sorry, there was an unexpected error. Please try again later."
             )
-            if self.module_manager.admin_chat_id:
-                await self._send_admin_notification(
-                    self.module_manager.admin_chat_id,
+            if self.admin_chat_id:
+                await self._notify_admin(
                     f"Critical bot error in check_price: {str(e)}"
                 )
 
@@ -389,7 +442,7 @@ class EnergyPriceBot:
             feedback_type = query.data.split('_')[1]
             accuracy = 1.0 if feedback_type == 'accurate' else 0.0
 
-            if self.ml_module.is_enabled():
+            if self.ml_module and self.ml_module.is_enabled():
                 # Update ML module with feedback
                 await self.ml_module.process({
                     "command": "update_feedback",
@@ -491,41 +544,22 @@ class EnergyPriceBot:
 
 
 def main():
-    """Start the bot."""
+    """Start the bot with proper event loop management"""
     try:
-        # Create the bot instance
-        logger.info("Starting new bot instance...")
-        bot = EnergyPriceBot()
-
-        # Initialize modules
-        logger.info("Initializing modules...")
-
-        # Set up asyncio event loop
+        # Create new event loop
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
-        # Initialize modules
-        loop.run_until_complete(bot.module_manager.initialize_modules())
-
-        # Start the bot
-        logger.info("Starting bot...")
+        # Create and run bot
+        bot = EnergyPriceBot()
         loop.run_until_complete(bot.start())
-
-        # Run forever
-        try:
-            loop.run_forever()
-        except KeyboardInterrupt:
-            logger.info("Bot stopped by user")
-            loop.run_until_complete(bot.stop())
-        except Exception as e:
-            logger.error(f"Error in main loop: {e}")
-            raise
-        finally:
-            loop.close()
-
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user")
+        loop.run_until_complete(bot.stop())
     except Exception as e:
         logger.critical(f"Bot failed to start: {str(e)}")
-        raise
+    finally:
+        loop.close()
 
 if __name__ == '__main__':
     main()
