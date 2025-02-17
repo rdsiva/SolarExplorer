@@ -825,6 +825,7 @@ dependencies = [
     { name = "python-dotenv" },
     { name = "python-telegram-bot" },
     { name = "requests" },
+    { name = "sqlalchemy" },
     { name = "telegram" },
     { name = "twilio" },
 ]
@@ -841,6 +842,7 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "python-telegram-bot", specifier = ">=20.0" },
     { name = "requests", specifier = ">=2.31.0" },
+    { name = "sqlalchemy", specifier = ">=2.0.38" },
     { name = "telegram", specifier = ">=0.0.1" },
     { name = "twilio", specifier = ">=9.4.5" },
 ]

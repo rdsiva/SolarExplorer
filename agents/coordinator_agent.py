@@ -1,6 +1,5 @@
 import logging
-import asyncio
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from .base_agent import BaseAgent
 from .data_collection_agent import DataCollectionAgent
 from .analysis_agent import AnalysisAgent
@@ -51,8 +50,7 @@ class CoordinatorAgent(BaseAgent):
 
                 # 3. Generate price predictions
                 prediction_result = await self.predictor.process({
-                    "command": "predict_prices",
-                    "price_history": self.analyzer.price_history
+                    "command": "predict_prices"
                 })
 
                 prediction_data = prediction_result.get("predictions", {}) if prediction_result.get("status") == "success" else {}
@@ -96,26 +94,26 @@ class CoordinatorAgent(BaseAgent):
         """Determine if a notification should be sent based on analysis and predictions"""
         current_price = analysis.get("current_price", 0)
         average_price = analysis.get("average_price", 0)
-        max_price = analysis.get("max_price", 0)
         predicted_price = prediction.get("short_term_prediction")
         prediction_confidence = prediction.get("confidence", 0)
+        feedback_quality = prediction.get("feedback_quality")
 
-        # Current price conditions (from previous implementation)
+        # Current price conditions
         price_drop = current_price <= (average_price - 0.5)
         price_spike = current_price >= (average_price + 1.0)
-        near_daily_low = current_price <= (analysis.get("min_price", 0) + 0.3)
-        trending_down = analysis.get("price_trend") == "falling"
 
-        # Prediction-based conditions
+        # Prediction-based conditions with confidence weighting
+        confidence_threshold = 70 if feedback_quality and feedback_quality >= 80 else 80
+
         predicted_significant_drop = (
             predicted_price is not None and
-            prediction_confidence >= 70 and
+            prediction_confidence >= confidence_threshold and
             predicted_price <= (current_price - 0.5)
         )
 
         predicted_significant_spike = (
             predicted_price is not None and
-            prediction_confidence >= 70 and
+            prediction_confidence >= confidence_threshold and
             predicted_price >= (current_price + 1.0)
         )
 
@@ -123,7 +121,6 @@ class CoordinatorAgent(BaseAgent):
         return (
             price_drop or 
             price_spike or 
-            (trending_down and near_daily_low) or
             predicted_significant_drop or
             predicted_significant_spike
         )

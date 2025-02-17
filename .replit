@@ -21,11 +21,15 @@ args = "Energy Price Bot"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
-args = "Test Agents"
+args = "Telegram Price Monitor"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
-args = "Telegram Price Monitor"
+args = "Flask Server"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Test Agents"
 
 [[workflows.workflow]]
 name = "Energy Price Bot"
@@ -42,6 +46,35 @@ task = "shell.exec"
 args = "python bot.py"
 
 [[workflows.workflow]]
+name = "Telegram Price Monitor"
+author = "agent"
+
+[workflows.workflow.metadata]
+agentRequireRestartOnSave = false
+
+[[workflows.workflow.tasks]]
+task = "packager.installForAll"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "python test_telegram_alerts.py"
+
+[[workflows.workflow]]
+name = "Flask Server"
+author = "agent"
+
+[workflows.workflow.metadata]
+agentRequireRestartOnSave = false
+
+[[workflows.workflow.tasks]]
+task = "packager.installForAll"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "python main.py"
+waitForPort = 5000
+
+[[workflows.workflow]]
 name = "Test Agents"
 author = "agent"
 
@@ -55,16 +88,6 @@ task = "packager.installForAll"
 task = "shell.exec"
 args = "python test_agents.py"
 
-[[workflows.workflow]]
-name = "Telegram Price Monitor"
-author = "agent"
-
-[workflows.workflow.metadata]
-agentRequireRestartOnSave = false
-
-[[workflows.workflow.tasks]]
-task = "packager.installForAll"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "python test_telegram_alerts.py"
+[[ports]]
+localPort = 5000
+externalPort = 80

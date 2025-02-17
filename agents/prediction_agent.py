@@ -3,27 +3,32 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
 import numpy as np
 from .base_agent import BaseAgent
+from models import PriceHistory
+from app import app
 
 logger = logging.getLogger(__name__)
 
 class PricePredictionAgent(BaseAgent):
     def __init__(self):
         super().__init__("PricePrediction")
-        self.prediction_window = 12  # Predict next 1 hour (12 * 5 minutes)
-        self.min_history_points = 6  # Minimum data points needed for prediction (30 minutes)
+        self.min_history_points = 6  # Minimum data points needed for prediction
 
     async def process(self, message: Dict[str, Any]) -> Dict[str, Any]:
         if message.get("command") == "predict_prices":
-            price_history = message.get("price_history", [])
-            if not price_history or len(price_history) < self.min_history_points:
-                logger.warning(f"Limited historical data. Using basic prediction with {len(price_history)} points.")
-                return {
-                    "status": "success",
-                    "predictions": self.get_limited_prediction(price_history)
-                }
-
             try:
-                predictions = self.predict_future_prices(price_history)
+                # Get historical data from database using Flask application context
+                with app.app_context():
+                    historical_records = PriceHistory.get_recent_history(hours=24)
+                    feedback_records = PriceHistory.get_recent_predictions_with_accuracy()
+
+                if not historical_records or len(historical_records) < self.min_history_points:
+                    logger.warning(f"Limited historical data. Using basic prediction with {len(historical_records) if historical_records else 0} points.")
+                    return {
+                        "status": "success",
+                        "predictions": self.get_limited_prediction(historical_records)
+                    }
+
+                predictions = self.predict_future_prices(historical_records, feedback_records)
                 return {
                     "status": "success",
                     "predictions": predictions
@@ -39,116 +44,142 @@ class PricePredictionAgent(BaseAgent):
             "message": "Unknown command"
         }
 
-    def get_limited_prediction(self, price_history: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Generate a basic prediction with limited data"""
-        if not price_history:
-            return {
-                "short_term_prediction": None,
-                "confidence": 0,
-                "trend": "unknown",
-                "next_hour_range": {"low": None, "high": None}
-            }
-
-        # Extract recent prices
-        prices = [
-            float(data.get('five_min_data', {}).get('price', 0))
-            for data in price_history
-            if data.get('five_min_data', {}).get('price') is not None
-        ]
-
-        if not prices:
-            return {
-                "short_term_prediction": None,
-                "confidence": 0,
-                "trend": "unknown",
-                "next_hour_range": {"low": None, "high": None}
-            }
-
-        # Use simple moving average for trend
-        current_price = prices[-1]
-        avg_price = sum(prices) / len(prices)
-        trend = "rising" if current_price > avg_price else "falling" if current_price < avg_price else "stable"
-
-        # Basic volatility calculation
-        volatility = np.std(prices) if len(prices) > 1 else 0.1
-        base_confidence = 30  # Base confidence for limited data
-
-        # Adjust confidence based on number of data points and volatility
-        confidence = min(base_confidence + (len(prices) * 5), 70)  # Max 70% confidence with limited data
-        confidence *= max(0.5, 1 - (volatility / 2))  # Reduce confidence with high volatility
-
-        return {
-            "short_term_prediction": round(current_price * (1.02 if trend == "rising" else 0.98 if trend == "falling" else 1.0), 2),
-            "confidence": round(min(confidence, 100), 1),
-            "trend": trend,
-            "next_hour_range": {
-                "low": round(current_price * (1 - volatility), 2),
-                "high": round(current_price * (1 + volatility), 2)
-            }
-        }
-
-    def predict_future_prices(self, price_history: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Predict future prices using historical data"""
+    def predict_future_prices(self, historical_records: List[PriceHistory], feedback_records: List[PriceHistory]) -> Dict[str, Any]:
+        """Predict future prices using historical data and feedback from database"""
         # Extract price data
-        prices = [
-            float(data.get('five_min_data', {}).get('price', 0))
-            for data in price_history
-            if data.get('five_min_data', {}).get('price') is not None
-        ]
+        prices = [record.hourly_price for record in historical_records if record.hourly_price is not None]
 
         if not prices:
             return self.get_limited_prediction([])
 
-        # Calculate moving averages
-        short_ma = self._calculate_moving_average(prices, min(6, len(prices)))   # 30-min MA
-        long_ma = self._calculate_moving_average(prices, min(12, len(prices)))   # 1-hour MA
+        # Calculate moving averages with feedback adjustment
+        prediction_weights = self.calculate_prediction_weights(feedback_records)
+        weighted_ma = self._calculate_weighted_moving_average(prices, prediction_weights)
 
-        # Calculate momentum and trend
-        momentum = (short_ma - long_ma) if (short_ma is not None and long_ma is not None) else 0
-        trend = self._determine_trend(momentum)
+        # Calculate trend and momentum
+        trend = self._determine_trend(prices, weighted_ma)
+        momentum = self._calculate_momentum(prices)
 
-        # Calculate weighted prediction
-        weights = np.array([0.5, 0.3, 0.2])  # Adjusted weights for recent prices
-        recent_prices = prices[-3:] if len(prices) >= 3 else prices
+        # Calculate base prediction
+        base_prediction = weighted_ma * (1 + momentum)
 
-        if len(recent_prices) >= 3:
-            prediction = np.average(recent_prices, weights=weights[-len(recent_prices):])
-        else:
-            prediction = np.mean(recent_prices)
+        # Adjust prediction based on feedback accuracy
+        avg_accuracy = np.mean([record.prediction_accuracy for record in feedback_records]) if feedback_records else 0.7
+        confidence_factor = min(avg_accuracy * 1.2, 1.0)  # Scale up accuracy but cap at 1.0
 
-        # Adjust prediction based on trend
-        trend_factor = 1.05 if trend == "rising" else 0.95 if trend == "falling" else 1.0
-        prediction *= trend_factor
-
-        # Calculate prediction confidence
-        volatility = np.std(prices[-12:] if len(prices) >= 12 else prices)
-        max_expected_volatility = 2.0  # Maximum expected price volatility
-        base_confidence = 50 + (min(len(prices), 24) * 2)  # Higher base confidence with more data
-        confidence = base_confidence * (1 - volatility/max_expected_volatility)
-
-        # Calculate price range based on volatility and trend
-        range_factor = max(0.02, min(volatility, 0.1))  # 2-10% range based on volatility
+        # Calculate final prediction and confidence
+        final_prediction = base_prediction * (1 + (momentum * confidence_factor))
+        confidence = self._calculate_confidence(prices, feedback_records)
 
         return {
-            "short_term_prediction": round(prediction, 2),
-            "confidence": round(min(confidence, 100), 1),
+            "short_term_prediction": round(final_prediction, 2),
+            "confidence": round(confidence, 1),
             "trend": trend,
-            "next_hour_range": {
-                "low": round(prediction * (1 - range_factor), 2),
-                "high": round(prediction * (1 + range_factor), 2)
-            }
+            "feedback_quality": round(avg_accuracy * 100, 1) if feedback_records else None
         }
 
-    def _calculate_moving_average(self, prices: List[float], window: int) -> Optional[float]:
-        """Calculate moving average for the given window size"""
-        if len(prices) < window:
-            return None
-        return sum(prices[-window:]) / window
+    def calculate_prediction_weights(self, feedback_records: List[PriceHistory]) -> Dict[str, float]:
+        """Calculate prediction weights based on historical accuracy"""
+        if not feedback_records:
+            return {"trend": 0.4, "momentum": 0.3, "historical": 0.3}
 
-    def _determine_trend(self, momentum: float) -> str:
-        """Determine price trend based on momentum"""
-        if momentum > 0.1:
-            return "rising"
-        elif momentum < -0.1:
-            return "falling"
-        return "stable"
+        accuracies = [record.prediction_accuracy for record in feedback_records if record.prediction_accuracy is not None]
+        if not accuracies:
+            return {"trend": 0.4, "momentum": 0.3, "historical": 0.3}
+
+        avg_accuracy = np.mean(accuracies)
+
+        # Adjust weights based on historical accuracy
+        if avg_accuracy > 0.8:
+            return {"trend": 0.5, "momentum": 0.3, "historical": 0.2}
+        elif avg_accuracy > 0.6:
+            return {"trend": 0.4, "momentum": 0.3, "historical": 0.3}
+        else:
+            return {"trend": 0.3, "momentum": 0.3, "historical": 0.4}
+
+    def _calculate_weighted_moving_average(self, prices: List[float], weights: Dict[str, float]) -> float:
+        """Calculate weighted moving average based on feedback-adjusted weights"""
+        if not prices:
+            return 0.0
+
+        window_size = min(len(prices), 12)  # Use up to 12 hours of data
+        recent_prices = prices[:window_size]
+
+        # Apply exponential weights that sum to 1
+        exp_weights = np.exp(-np.arange(len(recent_prices)) * weights["historical"])
+        exp_weights = exp_weights / exp_weights.sum()
+
+        return np.average(recent_prices, weights=exp_weights)
+
+    def _calculate_momentum(self, prices: List[float]) -> float:
+        """Calculate price momentum"""
+        if len(prices) < 2:
+            return 0.0
+
+        recent_changes = np.diff(prices[:12] if len(prices) >= 12 else prices)
+        return np.mean(recent_changes) / prices[0] if prices[0] != 0 else 0.0
+
+    def _determine_trend(self, prices: List[float], weighted_ma: float) -> str:
+        """Determine price trend using weighted moving average"""
+        if not prices:
+            return "unknown"
+
+        current_price = prices[0]
+        return "rising" if current_price > weighted_ma else "falling" if current_price < weighted_ma else "stable"
+
+    def _calculate_confidence(self, prices: List[float], feedback_records: List[PriceHistory]) -> float:
+        """Calculate prediction confidence based on historical accuracy and current market conditions"""
+        if not prices or not feedback_records:
+            return 50.0  # Base confidence
+
+        # Calculate volatility
+        volatility = np.std(prices) / np.mean(prices) if np.mean(prices) != 0 else 0.1
+
+        # Get average historical accuracy
+        accuracies = [record.prediction_accuracy for record in feedback_records if record.prediction_accuracy is not None]
+        avg_accuracy = np.mean(accuracies) if accuracies else 0.7
+
+        # Base confidence starts at 50
+        confidence = 50.0
+
+        # Adjust based on number of data points (up to +20)
+        confidence += min(len(prices), 20)
+
+        # Adjust based on historical accuracy (up to +20)
+        confidence += avg_accuracy * 20
+
+        # Penalize for volatility (up to -20)
+        confidence -= min(volatility * 100, 20)
+
+        return min(max(confidence, 0), 100)  # Ensure confidence is between 0 and 100
+
+    def get_limited_prediction(self, historical_records: List[PriceHistory]) -> Dict[str, Any]:
+        """Generate a basic prediction with limited data"""
+        if not historical_records:
+            return {
+                "short_term_prediction": None,
+                "confidence": 0,
+                "trend": "unknown",
+                "feedback_quality": None
+            }
+
+        prices = [record.hourly_price for record in historical_records if record.hourly_price is not None]
+
+        if not prices:
+            return {
+                "short_term_prediction": None,
+                "confidence": 0,
+                "trend": "unknown",
+                "feedback_quality": None
+            }
+
+        current_price = prices[0]
+        avg_price = np.mean(prices)
+        trend = "rising" if current_price > avg_price else "falling" if current_price < avg_price else "stable"
+
+        return {
+            "short_term_prediction": round(current_price * (1.02 if trend == "rising" else 0.98 if trend == "falling" else 1.0), 2),
+            "confidence": 30.0,  # Low confidence due to limited data
+            "trend": trend,
+            "feedback_quality": None
+        }
