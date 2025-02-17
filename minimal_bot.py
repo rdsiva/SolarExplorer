@@ -56,28 +56,16 @@ def escape_markdown(text):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send a message when the command /start is issued."""
-    chat_id = update.effective_chat.id
-
-    # Create default preferences for new user
-    with app.app_context():
-        UserPreferences.create_or_update(str(chat_id))
-
     welcome_message = (
         f"👋 Welcome to the Energy Price Monitor Bot!\n\n"
-        f"Your Chat ID is: {chat_id}\n"
-        "Available commands:\n"
+        f"Available commands:\n"
         "/check - Check current prices\n"
-        "/threshold - Set custom price alert threshold\n"
-        "/preferences - Show your current preferences\n"
-        "/tesla_url - Get Tesla OAuth callback URL for app configuration\n"
-        "/tesla_setup - Set up Tesla integration\n"
-        "/tesla_status - Check Tesla vehicle status\n"
-        "/tesla_update - Update Tesla preferences\n"
-        "/tesla_disable - Disable Tesla integration\n"
-        "/help - Show this help message\n"
         "/modules - List available modules\n"
         "/enable <module_name> - Enable a specific module\n"
-        "/disable <module_name> - Disable a specific module"
+        "/disable <module_name> - Disable a specific module\n"
+        "/preferences - Show your current preferences\n"
+        "/web - Open web management interface\n"
+        "/help - Show this help message"
     )
     await update.message.reply_text(welcome_message)
 
@@ -572,6 +560,31 @@ async def cmd_disable_module(update: Update, context: ContextTypes.DEFAULT_TYPE)
         logger.error(f"Error disabling module: {str(e)}", exc_info=True)
         await update.message.reply_text("Sorry, there was an error disabling the module.")
 
+# Add new command to display web interface URL
+async def web_interface(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Provide URL to web management interface"""
+    try:
+        repl_slug = os.environ.get("REPL_SLUG", "")
+        repl_owner = os.environ.get("REPL_OWNER", "")
+        web_url = f"https://{repl_slug}.{repl_owner}.repl.co/module-management"
+
+        message = (
+            "🌐 Module Management Web Interface\n\n"
+            f"Access your module settings here:\n{web_url}\n\n"
+            "You can:\n"
+            "• Enable/disable optional modules\n"
+            "• View module descriptions and status\n"
+            "• Configure module preferences"
+        )
+
+        await update.message.reply_text(message)
+
+    except Exception as e:
+        logger.error(f"Error displaying web interface URL: {str(e)}")
+        await update.message.reply_text(
+            "❌ Error retrieving web interface URL. Please try again later."
+        )
+
 def main():
     """Start the bot."""
     try:
@@ -587,13 +600,6 @@ def main():
             fallbacks=[CommandHandler('cancel', cancel)],
         )
 
-        # Add conversation handler for Tesla setup
-        tesla_setup_handler = ConversationHandler(
-            entry_points=[CommandHandler('tesla_setup', tesla_setup)],
-            states={}, # No states needed for OAuth flow
-            fallbacks=[CommandHandler('cancel', cancel)],
-        )
-
         # Add handlers
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CommandHandler("help", help_command))
@@ -603,10 +609,10 @@ def main():
         application.add_handler(CommandHandler("tesla_disable", tesla_disable))
         application.add_handler(CommandHandler("tesla_url", tesla_callback_url))
         application.add_handler(CommandHandler("modules", list_modules))
-        application.add_handler(CommandHandler("enable", cmd_enable_module))  # Add enable command
-        application.add_handler(CommandHandler("disable", cmd_disable_module))  # Add disable command
+        application.add_handler(CommandHandler("enable", cmd_enable_module))
+        application.add_handler(CommandHandler("disable", cmd_disable_module))
+        application.add_handler(CommandHandler("web", web_interface))
         application.add_handler(threshold_handler)
-        application.add_handler(tesla_setup_handler)
         application.add_handler(CallbackQueryHandler(handle_prediction_feedback))
 
         # Start the bot
