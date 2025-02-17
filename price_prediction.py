@@ -7,7 +7,6 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_absolute_error
 from app import app
 from models import PriceHistory
-from weather_provider import weather_provider
 
 # Configure logging
 logging.basicConfig(
@@ -29,7 +28,7 @@ class PricePredictionModel:
         self.training_interval = timedelta(hours=6)  # Retrain every 6 hours
 
     def _prepare_features(self, df):
-        """Prepare features for the model including weather data"""
+        """Prepare features for the model"""
         # Extract time-based features
         df['hour'] = df['timestamp'].dt.hour
         df['day_of_week'] = df['timestamp'].dt.dayofweek
@@ -45,45 +44,22 @@ class PricePredictionModel:
         df['price_change_1h'] = df['hourly_price'].diff()
         df['price_change_3h'] = df['hourly_price'] - df['price_3h_avg']
 
-        # Add weather features if available
-        if 'temperature' in df.columns:
-            df['temp_impact'] = df.apply(lambda x: 
-                0.15 if x['temperature'] >= 85 else  # Hot weather impact
-                0.1 if x['temperature'] <= 32 else   # Cold weather impact
-                0.05 if (x['temperature'] >= 75 or x['temperature'] <= 45) else  # Moderate impact
-                0.0,  # Normal conditions
-                axis=1
-            )
-
-            # Create weather condition impact
-            df['weather_impact'] = df.apply(lambda x: 
-                0.08 if x.get('weather_main', '').lower() in ['thunderstorm', 'rain', 'snow'] else
-                0.05 if x.get('weather_main', '').lower() in ['clouds', 'mist'] else
-                0.0,
-                axis=1
-            )
-
         feature_columns = [
             'hour', 'day_of_week', 'month', 'is_weekend',
             'price_1h_avg', 'price_3h_avg', 'price_24h_avg',
             'price_change_1h', 'price_change_3h'
         ]
 
-        # Add weather features if available
-        if 'temperature' in df.columns:
-            weather_features = ['temperature', 'humidity', 'temp_impact', 'weather_impact']
-            feature_columns.extend(weather_features)
-
         return df[feature_columns]
 
     async def _get_training_data(self):
-        """Get historical price and weather data for training"""
+        """Get historical price data for training"""
         with app.app_context():
             # Get last 30 days of price history
             cutoff_time = datetime.utcnow() - timedelta(days=30)
             history = PriceHistory.query.filter(
                 PriceHistory.timestamp >= cutoff_time,
-                PriceHistory.provider == "ComEd"
+                PriceHistory.provider == "ComEd"  # Explicitly specify the provider
             ).order_by(PriceHistory.timestamp.asc()).all()
 
             if not history:
@@ -96,20 +72,10 @@ class PricePredictionModel:
                 'prediction_accuracy': h.prediction_accuracy
             } for h in history])
 
-            # Add weather data
-            try:
-                weather_data = await weather_provider.get_current_weather()
-                if weather_data:
-                    for col in ['temperature', 'humidity', 'weather_main']:
-                        data[col] = weather_data[col]
-                    logger.info("Successfully added weather data to training set")
-            except Exception as e:
-                logger.warning(f"Could not fetch weather data: {str(e)}")
-
             return data
 
     async def train(self, force=False):
-        """Train the model on historical data with weather features"""
+        """Train the model on historical data"""
         try:
             # Check if we need to train
             if (not force and self.is_trained and self.last_training_time and 
@@ -133,7 +99,7 @@ class PricePredictionModel:
             # Calculate training accuracy
             y_pred = self.model.predict(X_scaled)
             mae = mean_absolute_error(y, y_pred)
-            logger.info("Model trained successfully with weather features. MAE: %.3f", mae)
+            logger.info("Model trained successfully. MAE: %.3f", mae)
 
             return True
 
@@ -142,7 +108,7 @@ class PricePredictionModel:
             return False
 
     async def predict(self, current_price, timestamp=None):
-        """Generate price predictions with weather-enhanced confidence scores"""
+        """Generate price predictions"""
         try:
             if not self.is_trained:
                 if not await self.train():
@@ -155,16 +121,6 @@ class PricePredictionModel:
                 'timestamp': timestamp,
                 'hourly_price': current_price
             }])
-
-            # Add weather data
-            try:
-                weather_data = await weather_provider.get_current_weather()
-                if weather_data:
-                    for col in ['temperature', 'humidity', 'weather_main']:
-                        current_data[col] = weather_data[col]
-                    logger.info("Added current weather data to prediction")
-            except Exception as e:
-                logger.warning(f"Could not fetch weather data for prediction: {str(e)}")
 
             # Add historical context
             with app.app_context():
@@ -190,13 +146,9 @@ class PricePredictionModel:
             # Make prediction
             prediction = self.model.predict(X_scaled[-1:])
 
-            # Calculate confidence score based on feature importance and weather impact
+            # Calculate confidence score based on feature importance
             feature_importances = self.model.feature_importances_
-            base_confidence = min(95, int(np.mean(feature_importances) * 100))
-
-            # Adjust confidence based on weather data availability
-            weather_confidence_adj = 5 if 'temperature' in X.columns else -5
-            confidence_score = min(95, base_confidence + weather_confidence_adj)
+            confidence_score = min(95, int(np.mean(feature_importances) * 100))
 
             # Get prediction range
             predictions = []
@@ -208,17 +160,11 @@ class PricePredictionModel:
                 'high': float(np.percentile(predictions, 75))
             }
 
-            # Get weather impact for explanation
-            weather_impact = None
-            if weather_data:
-                weather_impact = weather_provider.calculate_weather_impact(weather_data)
-
             return {
                 'predicted_price': float(prediction[0]),
                 'confidence': confidence_score,
                 'range': prediction_range,
-                'trend': 'rising' if prediction[0] > current_price else 'falling',
-                'weather_impact': weather_impact
+                'trend': 'rising' if prediction[0] > current_price else 'falling'
             }
 
         except Exception as e:
@@ -231,8 +177,7 @@ class PricePredictionModel:
                     'low': current_price * 0.95,
                     'high': current_price * 1.15
                 },
-                'trend': 'unknown',
-                'weather_impact': None
+                'trend': 'unknown'
             }
 
 # Create global instance

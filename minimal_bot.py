@@ -9,7 +9,6 @@ from price_monitor import PriceMonitor
 from config import TELEGRAM_BOT_TOKEN
 from models import PriceHistory, UserPreferences
 from app import app, db
-import numpy as np
 from price_prediction import price_predictor
 
 # Configure logging
@@ -104,7 +103,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Check current prices with ML predictions including weather impact"""
+    """Check current prices with ML predictions"""
     try:
         chat_id = update.effective_chat.id
         await update.message.reply_text("🔍 Checking current prices with ML analysis...")
@@ -113,18 +112,31 @@ async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
         hourly_data = await PriceMonitor.check_hourly_price()
         five_min_data = await PriceMonitor.check_five_min_price()
 
+        # Safely get current price, defaulting to None if not available
+        try:
+            current_price = float(hourly_data.get('price', 0)) if hourly_data.get('price') != 'N/A' else None
+        except (ValueError, TypeError):
+            current_price = None
+
+        if current_price is None:
+            await update.message.reply_text("❌ Error: Current price data is not available. Please try again later.")
+            return
+
         # Get user's custom threshold
         with app.app_context():
             prefs = UserPreferences.get_user_preferences(str(chat_id))
             threshold = prefs.price_threshold if prefs else 3.0
 
-        # Generate ML-based prediction with weather data
-        current_price = float(hourly_data.get('price', 0))
-        prediction = price_predictor.predict(current_price)
+        # Generate ML-based prediction
+        prediction = await price_predictor.predict(current_price)
+
+        if not prediction:
+            await update.message.reply_text("❌ Error generating price prediction. Please try again later.")
+            return
+
         predicted_price = prediction['predicted_price']
         confidence = prediction['confidence']
         prediction_range = prediction['range']
-        weather_impact = prediction.get('weather_impact')
 
         # Store prediction in database
         price_record = None
@@ -143,39 +155,28 @@ async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.error(f"Database error while storing prediction: {str(db_error)}")
                 db.session.rollback()
 
-        # Format message with enhanced ML predictions and weather impact
+        # Format message with ML predictions
         message = "📊 Current Energy Prices:\n\n"
         message += f"5-min price: {five_min_data.get('price', 'N/A')}¢\n"
-        message += f"Hourly price: {hourly_data.get('price', 'N/A')}¢\n"
+        message += f"Hourly price: {current_price:.2f}¢\n"
         message += f"Your Alert Threshold: {threshold}¢\n"
 
         # Add smart price alert based on ML prediction
         if predicted_price > threshold:
-            message += f"⚠️ Warning: ML model predicts price will exceed your threshold!\n"
+            message += f"\n⚠️ Warning: ML model predicts price will exceed your threshold!\n"
             message += f"Expected to reach {predicted_price:.1f}¢ (Confidence: {confidence}%)\n"
         elif current_price > threshold:
-            message += f"🔴 Currently Above Threshold\n"
+            message += f"\n🔴 Currently Above Threshold\n"
         else:
-            message += f"🟢 Below Threshold\n"
+            message += f"\n🟢 Below Threshold\n"
 
-        message += f"Trend: {prediction['trend'].capitalize()}\n\n"
+        message += f"Trend: {prediction['trend'].capitalize()}\n"
 
-        # Add ML prediction section with weather impact
-        message += "🤖 ML Price Prediction:\n"
+        # Add ML prediction section
+        message += "\n🤖 ML Price Prediction:\n"
         message += f"Next hour: {predicted_price:.1f}¢\n"
         message += f"Range: {prediction_range['low']:.1f}¢ - {prediction_range['high']:.1f}¢\n"
         message += f"Confidence: {confidence}%\n"
-
-        # Add weather impact section if available
-        if weather_impact is not None:
-            message += "\n🌡️ Weather Impact Analysis:\n"
-            impact_percent = int(weather_impact * 100)
-            if impact_percent > 10:
-                message += f"⚠️ Weather conditions may increase prices by {impact_percent}%\n"
-            elif impact_percent > 0:
-                message += f"ℹ️ Mild weather impact: +{impact_percent}% on prices\n"
-            else:
-                message += "✅ Weather conditions are favorable for energy prices\n"
 
         # Add timestamp
         cst_time = datetime.now(ZoneInfo("America/Chicago"))
@@ -197,7 +198,7 @@ async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         error_msg = f"❌ Error checking prices: {str(e)}"
-        logger.error(error_msg)
+        logger.error(error_msg, exc_info=True)
         await update.message.reply_text(error_msg)
 
 async def handle_prediction_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -235,20 +236,6 @@ async def handle_prediction_feedback(update: Update, context: ContextTypes.DEFAU
             chat_id=update.effective_chat.id,
             text="❌ Sorry, there was an error processing your feedback."
         )
-
-def calculate_prediction(current_price: float, hourly_data: dict) -> tuple[float, int]:
-    """Calculate price prediction using ML model"""
-    try:
-        # Use ML model for prediction
-        prediction = price_predictor.predict(current_price)
-
-        return prediction['predicted_price'], prediction['confidence']
-    except Exception as e:
-        logger.error(f"Error calculating ML prediction: {str(e)}")
-        # Fallback to simple prediction
-        return round(current_price * 1.05, 1), 60
-
-
 
 def main():
     """Start the bot."""
