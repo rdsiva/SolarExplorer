@@ -5,7 +5,8 @@ from telegram.ext import Application
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 import os
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from models import PriceHistory
 from app import app
 
@@ -114,6 +115,7 @@ class NotificationAgent(BaseAgent):
                 break
 
     def _format_notification_message(self, price_data: Dict[str, Any] | None = None, analysis: Dict[str, Any] | None = None, prediction: Dict[str, Any] | None = None) -> str:
+        """Format price alert message with detailed price information and prediction"""
         five_min_data = price_data.get("five_min_data", {}) if price_data else {}
         hourly_data = price_data.get("hourly_data", {}) if price_data else {}
 
@@ -132,13 +134,17 @@ class NotificationAgent(BaseAgent):
             status_emoji = "🟡"  # Yellow circle for normal prices
             price_status = "NORMAL PRICE LEVELS"
 
+        # Format timestamps
+        five_min_time = datetime.strptime(five_min_data.get('time', ''), '%I:%M %p').strftime('%I:%M %p %Z') if five_min_data.get('time') else 'N/A'
+        hourly_time = datetime.strptime(hourly_data.get('time', ''), '%I:%M %p').strftime('%I:%M %p %Z') if hourly_data.get('time') else 'N/A'
+
         message = (
             f"{status_emoji} <b>Energy Price Alert: {price_status}</b>\n\n"
             f"📊 <b>Current Prices:</b>\n"
-            f"• 5-min price: {five_min_data.get('price', 'N/A')}¢\n"
-            f"• Hourly price: {hourly_data.get('price', 'N/A')}¢\n\n"
+            f"• 5-min price ({five_min_time}): {five_min_data.get('price', 'N/A')}¢\n"
+            f"• Hourly price ({hourly_time}): {hourly_data.get('price', 'N/A')}¢\n\n"
             f"📈 <b>Analysis:</b>\n"
-            f"• Trend: {analysis.get('price_trend', 'unknown') if analysis else 'unknown'}\n"
+            f"• Trend: {analysis.get('price_trend', 'stable') if analysis else 'stable'}\n"
             f"• vs Average: {price_diff:+.1f}¢\n"
             f"• Day Range: {analysis.get('min_price', 'N/A') if analysis else 'N/A'}¢ - {analysis.get('max_price', 'N/A') if analysis else 'N/A'}¢\n\n"
         )
@@ -148,15 +154,15 @@ class NotificationAgent(BaseAgent):
             predicted_price = prediction.get("short_term_prediction")
             confidence = prediction.get("confidence")
             next_hour_range = prediction.get("next_hour_range", {})
-            trend = prediction.get("trend", "unknown")
+            trend = prediction.get("trend", "stable")
 
             if predicted_price is not None and confidence is not None:
                 message += (
                     f"🔮 <b>Price Prediction:</b>\n"
                     f"• Next hour: {predicted_price:.1f}¢\n"
-                    f"• Range: {next_hour_range.get('low', 'N/A')}¢ - {next_hour_range.get('high', 'N/A')}¢\n"
+                    f"• Range: {next_hour_range.get('low', predicted_price * 0.9):.1f}¢ - {next_hour_range.get('high', predicted_price * 1.1):.1f}¢\n"
                     f"• Confidence: {confidence}%\n"
-                    f"• Trend: {trend}\n\n"
+                    f"• Trend: {trend.capitalize()}\n\n"
                 )
 
                 # Add detailed recommendation based on prediction
@@ -167,15 +173,10 @@ class NotificationAgent(BaseAgent):
                     message += "💡 <b>Price Trend Opportunity:</b>\n"
                     message += "Prices expected to fall. Consider delaying usage if possible.\n\n"
 
-        # Add base recommendation based on current price status
-        if price_status == "GOOD TIME TO USE POWER":
-            message += "💡 <b>Recommendation:</b>\n"
-            message += "Consider running energy-intensive appliances now\n\n"
-        elif price_status == "HIGH PRICE ALERT":
-            message += "⚠️ <b>Recommendation:</b>\n"
-            message += "Delay non-essential power usage if possible\n\n"
+        # Add current timestamp in CST
+        current_time = datetime.now(timezone.utc).astimezone(ZoneInfo("America/Chicago"))
+        message += f"⏰ Last Updated: {current_time.strftime('%I:%M %p %Z')}"
 
-        message += f"⏰ Last Updated: {five_min_data.get('time', 'N/A')}"
         # Add feedback request if there's a prediction
         if prediction and prediction.get("short_term_prediction") is not None:
             message += "\n🎯 <b>Help us improve!</b>\n"

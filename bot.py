@@ -192,7 +192,7 @@ class EnergyPriceBot:
         if prediction_data and prediction_data.get('short_term_prediction'):
             with app.app_context():
                 price_record = PriceHistory.add_price_data(
-                    hourly_price=float(price_data.get('hourly_data').get('price', 0)),
+                    hourly_price=float(price_data.get('hourly_data', {}).get('price', 0)),
                     predicted_price=prediction_data['short_term_prediction'],
                     prediction_confidence=prediction_data['confidence']
                 )
@@ -256,36 +256,61 @@ class EnergyPriceBot:
 
         # Format the header based on price trend
         current_price = float(hourly_data.get('price', 0))
-        message = f"🔔 Energy Price Alert\n\n"
+        day_ahead = hourly_data.get('day_ahead_price', 0)
+        price_diff = current_price - day_ahead if isinstance(day_ahead, (int, float)) else 0
 
-        # Add current prices section
-        message += "📊 Current Prices:\n"
+        if price_diff <= -0.5:
+            status_emoji = "🟢"  # Green circle for good prices
+            price_status = "GOOD TIME TO USE POWER"
+        elif price_diff >= 1.0:
+            status_emoji = "🔴"  # Red circle for price spikes
+            price_status = "HIGH PRICE ALERT"
+        else:
+            status_emoji = "🟡"  # Yellow circle for normal prices
+            price_status = "NORMAL PRICE LEVELS"
+
+        message = f"{status_emoji} <b>Energy Price Alert: {price_status}</b>\n\n"
+
+        # Add current prices section with full timestamps
+        message += "📊 <b>Current Prices:</b>\n"
         message += f"• 5-min price: {five_min_data.get('price', 'N/A')}¢\n"
         message += f"• Hourly price: {hourly_data.get('price', 'N/A')}¢\n"
-        if hourly_data.get('day_ahead_price'):
-            message += f"• Day ahead: {hourly_data.get('day_ahead_price')}¢\n"
+        if day_ahead and day_ahead != 'N/A':
+            message += f"• Day ahead: {day_ahead}¢\n"
         message += "\n"
+
+        # Add analysis section with trends
+        message += "📈 <b>Analysis:</b>\n"
+        message += f"• Trend: {five_min_data.get('trend', 'unknown').capitalize()}\n"
+        message += f"• vs Average: {price_diff:+.1f}¢\n"
+        if 'price_range' in hourly_data:
+            range_data = hourly_data['price_range']
+            message += f"• Day Range: {range_data['min']}¢ - {range_data['max']}¢\n\n"
 
         # Add prediction section if available
         if prediction_data and prediction_data.get('short_term_prediction'):
-            message += "🔮 Next Hour Prediction:\n"
-            message += f"• Predicted: {prediction_data['short_term_prediction']:.1f}¢\n"
-            message += f"• Range: {prediction_data['next_hour_range']['low']}¢ - {prediction_data['next_hour_range']['high']}¢\n"
+            message += "🔮 <b>Price Prediction:</b>\n"
+            message += f"• Next hour: {prediction_data['short_term_prediction']:.1f}¢\n"
+            message += f"• Range: {prediction_data['next_hour_range']['low']:.1f}¢ - {prediction_data['next_hour_range']['high']:.1f}¢\n"
             message += f"• Confidence: {prediction_data['confidence']}%\n"
             message += f"• Trend: {prediction_data['trend'].capitalize()}\n\n"
 
             # Add specific recommendation based on prediction
             if prediction_data['trend'] == 'rising' and prediction_data['confidence'] >= 70:
-                message += "⚠️ Price expected to rise - Consider using power now\n"
+                message += "⚠️ <b>Price Trend Warning:</b>\n"
+                message += "Prices expected to rise. Consider using power now.\n\n"
             elif prediction_data['trend'] == 'falling' and prediction_data['confidence'] >= 70:
-                message += "💡 Price expected to fall - Consider delaying usage\n"
+                message += "💡 <b>Price Trend Opportunity:</b>\n"
+                message += "Prices expected to fall. Consider delaying usage if possible.\n\n"
 
-            message += "\n🎯 Help improve predictions!\n"
-            message += "Please rate this prediction's accuracy using the buttons below.\n"
-
-        # Add timestamp
+        # Add timestamp in CST
         cst_time = datetime.now(ZoneInfo("America/Chicago"))
-        message += f"\n⏰ Last Updated: {cst_time.strftime('%I:%M %p')} CST"
+        message += f"\n⏰ Last Updated: {cst_time.strftime('%Y-%m-%d %I:%M %p %Z')}"
+
+        # Add feedback request if there's a prediction
+        if prediction_data and prediction_data.get('short_term_prediction'):
+            message += "\n🎯 <b>Help us improve!</b>\n"
+            message += "Please rate this prediction's accuracy using the buttons below.\n"
 
         return message
 
