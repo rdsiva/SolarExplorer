@@ -2,9 +2,12 @@ import logging
 from typing import Dict, Any, List
 from .base_agent import BaseAgent
 from telegram.ext import Application
-from telegram import Bot
+from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 import os
 import asyncio
+from datetime import datetime
+from models import PriceHistory
+from app import app
 
 logger = logging.getLogger(__name__)
 
@@ -67,13 +70,41 @@ class NotificationAgent(BaseAgent):
                     prediction=notification.get("prediction", {})
                 )
 
-                # Send to Telegram
+                # Create feedback buttons if we have a prediction
+                reply_markup = None
+                if notification.get("prediction", {}).get("short_term_prediction"):
+                    keyboard = [
+                        [
+                            InlineKeyboardButton(
+                                "✅ Accurate",
+                                callback_data=f"feedback_accurate_{notification['timestamp']}"
+                            ),
+                            InlineKeyboardButton(
+                                "❌ Inaccurate",
+                                callback_data=f"feedback_inaccurate_{notification['timestamp']}"
+                            )
+                        ]
+                    ]
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+
+                # Send to Telegram with feedback buttons if applicable
                 await self.bot.send_message(
                     chat_id=self.chat_id,
                     text=message,
-                    parse_mode='HTML'
+                    parse_mode='HTML',
+                    reply_markup=reply_markup
                 )
                 logger.info(f"Sent notification to Telegram: {message}")
+
+                # Store prediction in database if available
+                if notification.get("prediction", {}).get("short_term_prediction"):
+                    with app.app_context():
+                        PriceHistory.add_price_data(
+                            hourly_price=notification["price_data"]["hourly_data"]["price"],
+                            predicted_price=notification["prediction"]["short_term_prediction"],
+                            prediction_confidence=notification["prediction"]["confidence"]
+                        )
+
             except Exception as e:
                 logger.error(f"Error sending notification: {str(e)}")
                 # Put the notification back in queue if sending failed
@@ -143,4 +174,9 @@ class NotificationAgent(BaseAgent):
             message += "Delay non-essential power usage if possible\n\n"
 
         message += f"⏰ Last Updated: {five_min_data.get('time', 'N/A')}"
+        # Add feedback request if there's a prediction
+        if prediction and prediction.get("short_term_prediction") is not None:
+            message += "\n🎯 <b>Help us improve!</b>\n"
+            message += "Please rate this prediction's accuracy using the buttons below.\n"
+
         return message

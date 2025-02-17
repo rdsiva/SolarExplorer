@@ -1,5 +1,5 @@
-from telegram import Bot, Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
 import asyncio
 import logging
 from datetime import datetime
@@ -7,12 +7,15 @@ import requests
 from config import TELEGRAM_BOT_TOKEN, HEALTH_CHECK_URL, MIN_RATE
 from price_monitor import PriceMonitor
 from zoneinfo import ZoneInfo
+from models import PriceHistory
+from app import app
 
 logger = logging.getLogger(__name__)
 
 class EnergyPriceBot:
     def __init__(self):
         self.application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+        self.bot = self.application.bot
         self.setup_handlers()
 
     def setup_handlers(self):
@@ -23,6 +26,8 @@ class EnergyPriceBot:
         self.application.add_handler(CommandHandler("stop_monitoring", self.cmd_stop_monitoring))
         self.application.add_handler(CommandHandler("check_price", self.cmd_check_price))
         self.application.add_handler(CommandHandler("status", self.cmd_status))
+        # Add feedback handler
+        self.application.add_handler(CallbackQueryHandler(self.handle_prediction_feedback))
 
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the /start command"""
@@ -59,17 +64,11 @@ class EnergyPriceBot:
         try:
             # Check 5-minute price
             five_min_data = await PriceMonitor.check_five_min_price()
-            await context.bot.send_message(
-                chat_id=context.job.chat_id,
-                text=five_min_data['message']
-            )
+            await self.send_price_alert(context.job.chat_id, five_min_data)
 
             # Check hourly price
             hourly_data = await PriceMonitor.check_hourly_price()
-            await context.bot.send_message(
-                chat_id=context.job.chat_id,
-                text=hourly_data['message']
-            )
+            await self.send_price_alert(context.job.chat_id, hourly_data)
 
         except Exception as e:
             error_message = f"❌ Error during price monitoring: {str(e)}"
@@ -126,10 +125,10 @@ class EnergyPriceBot:
             logger.info(f"Initiating price check at CST: {cst_time}")
 
             five_min_data = await PriceMonitor.check_five_min_price()
-            await update.message.reply_text(five_min_data['message'])
+            await self.send_price_alert(update.effective_chat.id, five_min_data)
 
             hourly_data = await PriceMonitor.check_hourly_price()
-            await update.message.reply_text(hourly_data['message'])
+            await self.send_price_alert(update.effective_chat.id, hourly_data)
 
         except Exception as e:
             error_msg = f"❌ Error checking prices: {str(e)}"
@@ -154,6 +153,79 @@ class EnergyPriceBot:
         cst_now = datetime.now(ZoneInfo("America/Chicago"))
         logger.info(f"Current CST Time: {cst_now.strftime('%Y-%m-%d %I:%M %p')}")
         return cst_now
+
+    async def send_price_alert(self, chat_id: int, price_data: dict, prediction_data: dict = None):
+        """Send price alert with feedback buttons"""
+        message = self._format_price_message(price_data, prediction_data)
+
+        # Only add feedback buttons if there's a prediction
+        if prediction_data and prediction_data.get('short_term_prediction'):
+            # Create inline keyboard with feedback buttons
+            keyboard = [
+                [
+                    InlineKeyboardButton("✅ Accurate", callback_data=f"feedback_accurate_{prediction_data['timestamp']}"),
+                    InlineKeyboardButton("❌ Inaccurate", callback_data=f"feedback_inaccurate_{prediction_data['timestamp']}")
+                ]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await self.bot.send_message(
+                chat_id=chat_id,
+                text=message,
+                reply_markup=reply_markup,
+                parse_mode='HTML'
+            )
+        else:
+            await self.bot.send_message(
+                chat_id=chat_id,
+                text=message,
+                parse_mode='HTML'
+            )
+
+
+    async def handle_prediction_feedback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle feedback on price predictions"""
+        query = update.callback_query
+        await query.answer()  # Acknowledge the button click
+
+        try:
+            feedback_type, timestamp = query.data.split('_')[1:]  # feedback_accurate_timestamp or feedback_inaccurate_timestamp
+            accuracy = 1.0 if feedback_type == 'accurate' else 0.0
+
+            # Update prediction accuracy in database
+            with app.app_context():
+                success = PriceHistory.update_prediction_accuracy(timestamp, accuracy)
+
+                if success:
+                    feedback_msg = "✅ Thank you for your feedback! This helps improve future predictions."
+                else:
+                    feedback_msg = "❌ Sorry, couldn't process your feedback. Please try again later."
+
+            # Edit original message to reflect feedback
+            await query.edit_message_reply_markup(reply_markup=None)  # Remove feedback buttons
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=feedback_msg
+            )
+
+        except Exception as e:
+            logger.error(f"Error processing prediction feedback: {str(e)}")
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="❌ Sorry, there was an error processing your feedback."
+            )
+
+    def _format_price_message(self, price_data: dict, prediction_data: dict = None) -> str:
+        """Format price alert message with prediction information"""
+        message = price_data.get('message', '')
+
+        if prediction_data and prediction_data.get('short_term_prediction'):
+            message += f"\n\n🔮 Price Prediction:\n"
+            message += f"• Next hour: {prediction_data['short_term_prediction']:.1f}¢\n"
+            message += f"• Confidence: {prediction_data['confidence']}%\n"
+            message += f"• Trend: {prediction_data['trend']}\n\n"
+            message += "Please provide feedback on this prediction's accuracy!"
+
+        return message
 
 
     def run(self):
