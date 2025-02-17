@@ -30,12 +30,52 @@ logger.info(f"Using webhook URL: {WEBHOOK_URL}")
 # Initialize bot at module level
 application = None
 
+async def check_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Check and display current prices"""
+    try:
+        await update.message.reply_text("🔍 Checking prices...")
+        await update.message.reply_text("This is a test response. Price checking will be implemented soon.")
+    except Exception as e:
+        logger.error(f"Error in check_price: {str(e)}", exc_info=True)
+        await update.message.reply_text("Sorry, there was an error checking prices.")
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /start command"""
+    try:
+        chat_id = update.effective_chat.id
+        logger.info(f"Received /start command from chat_id: {chat_id}")
+
+        welcome_message = (
+            "👋 Welcome to the Energy Price Monitor Bot!\n\n"
+            "Available commands:\n"
+            "/check - Check current prices\n"
+            "/help - Show this help message"
+        )
+        await update.message.reply_text(welcome_message)
+        logger.info(f"Sent welcome message to user {update.effective_user.id}")
+    except Exception as e:
+        logger.error(f"Error in start command: {str(e)}", exc_info=True)
+        await update.message.reply_text("Sorry, there was an error processing your command.")
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /help command"""
+    try:
+        help_text = (
+            "🤖 Energy Price Monitor Help\n\n"
+            "Commands:\n"
+            "/start - Start the bot\n"
+            "/help - Show this help message\n"
+            "/check - Check current energy prices"
+        )
+        await update.message.reply_text(help_text)
+        logger.info(f"Sent help message to user {update.effective_user.id}")
+    except Exception as e:
+        logger.error(f"Error in help command: {str(e)}", exc_info=True)
+        await update.message.reply_text("Sorry, there was an error showing help.")
+
 async def setup_webhook(app_instance: Application):
     """Set up webhook for receiving updates"""
     try:
-        logger.info(f"Setting up webhook at {WEBHOOK_URL}")
-
-        # Get current webhook info and log it
         webhook_info = await app_instance.bot.get_webhook_info()
         logger.info(f"Current webhook info: {webhook_info.to_dict()}")
 
@@ -43,7 +83,6 @@ async def setup_webhook(app_instance: Application):
         if webhook_info.url:
             logger.info(f"Deleting existing webhook: {webhook_info.url}")
             await app_instance.bot.delete_webhook(drop_pending_updates=True)
-            await asyncio.sleep(1)  # Small delay to ensure webhook is deleted
 
         # Set new webhook
         success = await app_instance.bot.set_webhook(
@@ -52,17 +91,15 @@ async def setup_webhook(app_instance: Application):
             drop_pending_updates=True
         )
 
-        if not success:
-            raise Exception("Failed to set webhook")
-
-        # Verify webhook setup
-        new_webhook_info = await app_instance.bot.get_webhook_info()
-        logger.info(f"New webhook info: {new_webhook_info.to_dict()}")
-
-        if new_webhook_info.last_error:
-            logger.warning(f"Webhook has errors: {new_webhook_info.last_error}")
-
-        return True
+        if success:
+            logger.info("Webhook set successfully")
+            # Verify webhook setup
+            new_webhook_info = await app_instance.bot.get_webhook_info()
+            logger.info(f"New webhook info: {new_webhook_info.to_dict()}")
+            return True
+        else:
+            logger.error("Failed to set webhook")
+            return False
 
     except Exception as e:
         logger.error(f"Failed to set up webhook: {str(e)}", exc_info=True)
@@ -117,35 +154,6 @@ def root():
         'webhook_url': WEBHOOK_URL
     })
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /start command"""
-    try:
-        chat_id = update.effective_chat.id
-        logger.info(f"Received /start command from chat_id: {chat_id}")
-
-        welcome_message = (
-            "👋 Welcome to the Energy Price Monitor Bot!\n\n"
-            "Available commands:\n"
-            "/check - Check current prices\n"
-            "/help - Show this help message"
-        )
-        await update.message.reply_text(welcome_message)
-        logger.info(f"Sent welcome message to user {update.effective_user.id}")
-    except Exception as e:
-        logger.error(f"Error in start command: {str(e)}", exc_info=True)
-        await update.message.reply_text("Sorry, there was an error processing your command.")
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /help command"""
-    help_text = (
-        "🤖 Energy Price Monitor Help\n\n"
-        "Commands:\n"
-        "/start - Start the bot\n"
-        "/help - Show this help message\n"
-        "/check - Check current energy prices"
-    )
-    await update.message.reply_text(help_text)
-
 def create_app():
     """Initialize the Flask app and Telegram bot"""
     global application
@@ -167,6 +175,7 @@ def create_app():
         # Add command handlers
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CommandHandler("help", help_command))
+        application.add_handler(CommandHandler("check", check_price))
 
         # Initialize application and set up webhook
         loop.run_until_complete(application.initialize())
