@@ -45,48 +45,16 @@ try:
     logger.info("Initializing database...")
     init_db(app)
 
-    def init_modules():
-        """Initialize modules after app context is created"""
-        from modules import (
-            ModuleManager,
-            get_price_monitor_module,
-            get_pattern_analysis_module,
-            get_ml_prediction_module,
-            get_dashboard_module
-        )
-
-        # Initialize the module manager
-        logger.info("Initializing ModuleManager...")
-        module_manager = ModuleManager()
-
-        # Initialize modules using factory functions
-        price_module = get_price_monitor_module()()
-        pattern_module = get_pattern_analysis_module()()
-        ml_module = get_ml_prediction_module()()
-        dashboard_module = get_dashboard_module()()
-
-        logger.info("Registering modules...")
-        module_manager.register_module(price_module)
-        module_manager.register_module(pattern_module)
-        module_manager.register_module(ml_module)
-        module_manager.register_module(dashboard_module)
-
-        # Enable required modules
-        logger.info("Enabling required price monitor module...")
-        module_manager.enable_module("price_monitor")
-        logger.info("Enabling dashboard module...")
-        module_manager.enable_module("dashboard")
-
-        return module_manager
-
-    # Initialize modules after database setup
     with app.app_context():
-        module_manager = init_modules()
+        # Initialize the agent manager (this will initialize all agents)
+        from agents.agent_manager import AgentManager
+        logger.info("Initializing AgentManager...")
+        agent_manager = AgentManager()
 
-    # Import routes after app initialization
-    import routes
+        # Import routes after all initialization is complete
+        import routes
 
-    logger.info("Flask application initialization completed")
+        logger.info("Flask application initialization completed")
 
 except Exception as e:
     logger.critical(f"Failed to initialize Flask application: {str(e)}", exc_info=True)

@@ -8,12 +8,7 @@ from agents.tesla_charging_agent import TeslaAPI
 import logging
 import os
 from typing import Dict, List, Any
-from agents.base_agent import BaseAgent
-from agents.live_price_agent import LivePriceAgent
-from agents.notification_agent import NotificationAgent
-from agents.analysis_agent import AnalysisAgent
-from agents.data_collection_agent import DataCollectionAgent
-
+from agents.agent_manager import AgentManager
 
 logger = logging.getLogger(__name__)
 
@@ -304,27 +299,21 @@ def test_tesla_callback():
 def agent_monitor():
     """Display the agent monitoring dashboard."""
     try:
-        # Initialize agents if needed (in real app these would be persistent)
-        agents: List[BaseAgent] = [
-            LivePriceAgent(config={'price_threshold': 3.0, 'check_interval': 300}),
-            NotificationAgent(),
-            AnalysisAgent(),
-            DataCollectionAgent()
-        ]
-
-        # Collect agent statuses
-        agent_statuses = [agent.get_status() for agent in agents]
+        # Get agent statuses from AgentManager singleton
+        agent_manager = AgentManager()
+        agent_statuses = agent_manager.get_agent_statuses()
 
         # Calculate dashboard metrics
-        total_agents = len(agents)
+        total_agents = len(agent_statuses)
         active_agents = sum(1 for status in agent_statuses if status.get('running', False))
-        total_messages = sum(status.get('queue_size', 0) for status in agent_statuses)
+        total_messages = sum(status.get('total_messages_processed', 0) for status in agent_statuses)
         system_healthy = all(
             not status.get('last_error')
             and (status.get('consecutive_failures', 0) == 0)
             for status in agent_statuses
         )
 
+        logger.info(f"Rendering agent monitor with {len(agent_statuses)} agents")
         return render_template(
             'agent_dashboard.html',
             agents=agent_statuses,
@@ -335,6 +324,6 @@ def agent_monitor():
         )
 
     except Exception as e:
-        logger.error(f"Error displaying agent monitor: {str(e)}")
+        logger.error(f"Error displaying agent monitor: {str(e)}", exc_info=True)
         return render_template('error.html',
             message="An error occurred while loading the agent monitor."), 500

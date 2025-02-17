@@ -1,7 +1,7 @@
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.orm import DeclarativeBase
 import logging
-from flask import Flask
+from flask import Flask, current_app
 
 logger = logging.getLogger(__name__)
 
@@ -30,3 +30,9 @@ def init_db(app: Flask):
 def get_db():
     """Get database instance"""
     return db
+
+def get_db_session():
+    """Get current database session safely"""
+    if current_app:
+        return db.session
+    return None

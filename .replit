@@ -176,7 +176,7 @@ task = "packager.installForAll"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "python -m flask run --host=0.0.0.0 --port=5001"
+args = "python -m flask --app app run --host=0.0.0.0 --port=5001"
 waitForPort = 5001
 
 [[ports]]
