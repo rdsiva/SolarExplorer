@@ -1,6 +1,6 @@
 import os
 import logging
-import requests  # Add this import
+import requests
 from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
 from config import TELEGRAM_BOT_TOKEN, HEALTH_CHECK_URL, MIN_RATE
@@ -8,6 +8,8 @@ from modules import ModuleManager, PriceMonitorModule, PatternAnalysisModule, ML
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from app import app
+from flask import render_template #Import render_template
+
 
 # Configure logging
 logging.basicConfig(
@@ -54,7 +56,7 @@ class EnergyPriceBot:
             self.application.add_handler(CommandHandler("help", self.cmd_help))
             self.application.add_handler(CommandHandler("check_price", self.cmd_check_price))
             self.application.add_handler(CommandHandler("status", self.cmd_status))
-            self.application.add_handler(CommandHandler("modules", self.cmd_list_modules))
+            self.application.add_handler(CommandHandler("modules", self.cmd_modules)) #Changed to cmd_modules
             self.application.add_handler(CommandHandler("enable", self.cmd_enable_module))
             self.application.add_handler(CommandHandler("disable", self.cmd_disable_module))
             self.application.add_handler(CallbackQueryHandler(self.handle_prediction_feedback))
@@ -83,17 +85,19 @@ class EnergyPriceBot:
             logger.info(f"Received /start command from chat_id: {chat_id}")
             welcome_message = (
                 f"👋 Welcome to the Energy Price Monitor Bot!\n\n"
-                f"Your Chat ID is: {chat_id}\n"
-                "Please save this ID in your .env file as TELEGRAM_CHAT_ID\n\n"
-                f"I can help you track energy prices and notify you when they fall below "
-                f"{MIN_RATE} cents.\n\n"
-                "Available commands:\n"
-                "/check_price - Check current prices\n"
-                "/status - Check monitoring status\n"
-                "/modules - List available modules and their status\n"
-                "/enable <module> - Enable a specific module\n"
-                "/disable <module> - Disable a specific module\n"
-                "/help - Show this help message"
+                f"Your Chat ID is: {chat_id}\n\n"
+                f"🔍 Available Commands:\n"
+                f"1. Price Monitoring (Required Module):\n"
+                f"  • /check_price - Check current energy prices\n"
+                f"  • /status - View monitoring status\n\n"
+                f"2. Module Management:\n"
+                f"  • /modules - List all available modules\n"
+                f"  • 🌐 Manage modules at: https://{app.config['SERVER_NAME']}/modules\n\n"
+                f"3. Pattern Analysis (Optional Module):\n"
+                f"  • Provides volatility and trend analysis\n\n"
+                f"4. ML Predictions (Optional Module):\n"
+                f"  • Provides price predictions\n\n"
+                f"Type /help to see this message again."
             )
             await update.message.reply_text(welcome_message)
             logger.info(f"Sent welcome message to chat_id: {chat_id}")
@@ -105,19 +109,39 @@ class EnergyPriceBot:
         """Handle the /help command"""
         await self.cmd_start(update, context)
 
-    async def cmd_list_modules(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def cmd_modules(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """List all available modules and their status"""
         try:
             modules = self.module_manager.get_all_modules()
             message = "📊 Available Modules:\n\n"
 
+            # First list the required price monitor module
             for module in modules:
-                status = "✅ Enabled" if module["enabled"] else "❌ Disabled"
-                required = " (Required)" if module["name"] == "price_monitor" else ""
-                message += f"• {module['name']}{required}: {status}\n"
-                message += f"  Description: {module['description']}\n\n"
+                if module["name"] == "price_monitor":
+                    status = "✅ Always Enabled (Required)"
+                    message += (
+                        f"1. {module['name'].replace('_', ' ').title()} 🔒\n"
+                        f"   • Status: {status}\n"
+                        f"   • Description: {module['description']}\n\n"
+                    )
+                    break
 
-            message += "\nUse /enable <module> to enable or /disable <module> to disable a module"
+            # Then list optional modules
+            optional_count = 2
+            for module in modules:
+                if module["name"] != "price_monitor":
+                    status = "✅ Enabled" if module["enabled"] else "❌ Disabled"
+                    message += (
+                        f"{optional_count}. {module['name'].replace('_', ' ').title()} (Optional)\n"
+                        f"   • Status: {status}\n"
+                        f"   • Description: {module['description']}\n\n"
+                    )
+                    optional_count += 1
+
+            message += "\n🌐 Manage modules at:\n"
+            message += f"https://{app.config['SERVER_NAME']}/modules\n\n"
+            message += "Note: The price monitor module is required and cannot be disabled."
+
             await update.message.reply_text(message)
         except Exception as e:
             logger.error(f"Error listing modules: {str(e)}")
@@ -292,6 +316,12 @@ class EnergyPriceBot:
             return response.status_code == 200
         except:
             return False
+
+
+@app.route('/modules', methods=['GET'])
+def module_manager_view():
+    modules = bot.module_manager.get_all_modules() # Access module_manager through bot instance
+    return render_template('module_manager.html', modules=modules)
 
 
 if __name__ == '__main__':
