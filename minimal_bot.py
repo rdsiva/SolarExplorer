@@ -10,8 +10,7 @@ from config import TELEGRAM_BOT_TOKEN
 from models import PriceHistory, UserPreferences, TeslaPreferences
 from app import app, db
 from price_prediction import price_predictor
-from tesla_api import TeslaAPI # Assuming TeslaAPI class is defined in tesla_api.py
-
+from tesla_api import TeslaAPI 
 
 # Configure logging
 logging.basicConfig(
@@ -70,15 +69,21 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Add logging statements for Tesla commands
 async def tesla_setup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start Tesla integration setup with OAuth authentication"""
-    logger.info(f"Starting Tesla setup for chat_id: {update.effective_chat.id}")
+    chat_id = update.effective_chat.id
+    logger.info(f"Starting Tesla setup for chat_id: {chat_id}")
 
     try:
+        logger.info("Initializing TeslaAPI...")
         api = TeslaAPI()
-        auth_url = api.generate_auth_url(str(update.effective_chat.id))
+
+        logger.info("Generating Tesla auth URL...")
+        auth_url = api.generate_auth_url(str(chat_id))
+        logger.info(f"Generated auth URL: {auth_url}")
 
         keyboard = [[InlineKeyboardButton("🔐 Login with Tesla", url=auth_url)]]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
+        logger.info("Sending Tesla setup message with login button...")
         await update.message.reply_text(
             "Let's set up Tesla integration!\n\n"
             "1. Click the button below to log in with your Tesla account\n"
@@ -86,11 +91,12 @@ async def tesla_setup(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "3. After authorization, return here and use /tesla_status to check your vehicle",
             reply_markup=reply_markup
         )
+        logger.info("Tesla setup message sent successfully")
 
         return ConversationHandler.END
 
     except Exception as e:
-        logger.error(f"Error generating Tesla auth URL: {str(e)}")
+        logger.error(f"Error in tesla_setup: {str(e)}", exc_info=True)
         await update.message.reply_text(
             "❌ An error occurred while setting up Tesla integration.\n"
             "Please try again later or contact support."
@@ -387,6 +393,28 @@ async def show_preferences(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(message)
 
 
+async def tesla_disable(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Disable Tesla integration for the user"""
+    chat_id = update.effective_chat.id
+    logger.info(f"Disabling Tesla integration for chat_id: {chat_id}")
+
+    with app.app_context():
+        prefs = TeslaPreferences.query.filter_by(chat_id=str(chat_id)).first()
+        if not prefs:
+            await update.message.reply_text(
+                "❌ Tesla integration is not configured.\n"
+                "Use /tesla_setup to set up Tesla integration."
+            )
+            return
+
+        # Disable Tesla integration
+        prefs.enabled = False
+        db.session.commit()
+
+        await update.message.reply_text(
+            "✅ Tesla integration has been disabled.\n"
+            "Use /tesla_setup to re-enable it."
+        )
 
 def main():
     """Start the bot."""
