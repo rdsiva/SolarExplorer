@@ -54,6 +54,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/check - Check current prices\n"
         "/threshold - Set custom price alert threshold\n"
         "/preferences - Show your current preferences\n"
+        "/tesla_url - Get Tesla OAuth callback URL for app configuration\n"
         "/tesla_setup - Set up Tesla integration\n"
         "/tesla_status - Check Tesla vehicle status\n"
         "/tesla_update - Update Tesla preferences\n"
@@ -416,6 +417,33 @@ async def tesla_disable(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Use /tesla_setup to re-enable it."
         )
 
+async def tesla_callback_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Display the Tesla OAuth callback URL for app configuration"""
+    try:
+        # Get the Replit domain for the callback URL
+        repl_owner = os.environ.get("REPL_OWNER", "")
+        repl_slug = os.environ.get("REPL_SLUG", "")
+
+        # Generate base callback URL
+        base_callback_url = f"https://{repl_slug}.{repl_owner}.repl.co/tesla/oauth/callback"
+
+        message = (
+            "🔗 Tesla OAuth Callback URL\n\n"
+            "Use this URL in your Tesla app OAuth configuration:\n\n"
+            f"`{base_callback_url}`\n\n"
+            "After configuring, use /tesla_setup to begin the authentication process."
+        )
+
+        await update.message.reply_text(
+            message,
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        logger.error(f"Error displaying callback URL: {str(e)}")
+        await update.message.reply_text(
+            "❌ Error retrieving callback URL. Please try again later."
+        )
+
 def main():
     """Start the bot."""
     try:
@@ -445,6 +473,7 @@ def main():
         application.add_handler(CommandHandler("preferences", show_preferences))
         application.add_handler(CommandHandler("tesla_status", tesla_status))
         application.add_handler(CommandHandler("tesla_disable", tesla_disable))
+        application.add_handler(CommandHandler("tesla_url", tesla_callback_url))
         application.add_handler(threshold_handler)
         application.add_handler(tesla_setup_handler)
         application.add_handler(CallbackQueryHandler(handle_prediction_feedback))
