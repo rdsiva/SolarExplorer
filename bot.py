@@ -21,20 +21,27 @@ logger = logging.getLogger(__name__)
 class EnergyPriceBot:
     def __init__(self):
         """Initialize the bot with polling configuration"""
-        self.application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+        self.bot_token = TELEGRAM_BOT_TOKEN
+        self.application = Application.builder().token(self.bot_token).build()
         self.bot = self.application.bot
         logger.info("Initializing bot in polling mode")
-        self.setup_handlers()
+        self._setup_handlers()
 
-    def setup_handlers(self):
+    def _setup_handlers(self):
         """Set up command handlers for the bot"""
-        self.application.add_handler(CommandHandler("start", self.cmd_start))
-        self.application.add_handler(CommandHandler("help", self.cmd_help))
-        self.application.add_handler(CommandHandler("start_monitoring", self.cmd_start_monitoring))
-        self.application.add_handler(CommandHandler("stop_monitoring", self.cmd_stop_monitoring))
-        self.application.add_handler(CommandHandler("check_price", self.cmd_check_price))
-        self.application.add_handler(CommandHandler("status", self.cmd_status))
-        self.application.add_handler(CallbackQueryHandler(self.handle_prediction_feedback))
+        try:
+            logger.info("Setting up command handlers")
+            self.application.add_handler(CommandHandler("start", self.cmd_start))
+            self.application.add_handler(CommandHandler("help", self.cmd_help))
+            self.application.add_handler(CommandHandler("start_monitoring", self.cmd_start_monitoring))
+            self.application.add_handler(CommandHandler("stop_monitoring", self.cmd_stop_monitoring))
+            self.application.add_handler(CommandHandler("check_price", self.cmd_check_price))
+            self.application.add_handler(CommandHandler("status", self.cmd_status))
+            self.application.add_handler(CallbackQueryHandler(self.handle_prediction_feedback))
+            logger.info("Command handlers setup completed successfully")
+        except Exception as e:
+            logger.error(f"Error setting up handlers: {str(e)}")
+            raise
 
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the /start command"""
@@ -143,28 +150,37 @@ class EnergyPriceBot:
     async def cmd_check_price(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Check current prices on demand with predictions"""
         try:
+            chat_id = update.effective_chat.id
+            logger.info(f"Processing /check_price command for chat_id: {chat_id}")
+
             await update.message.reply_text("🔍 Checking current prices...")
 
+            # Get price data
             hourly_data = await PriceMonitor.check_hourly_price()
+            five_min_data = await PriceMonitor.check_five_min_price()
+
             current_price = float(hourly_data.get('price', 0))
 
             # Generate prediction data
-            predicted_price = round(current_price * 1.1, 1)  # Example prediction
-            confidence = 75
-            trend = 'rising' if predicted_price > current_price else 'falling'
-
+            predicted_price = round(current_price * 1.1, 1)
             prediction_data = {
                 'short_term_prediction': predicted_price,
-                'confidence': confidence,
-                'trend': trend,
+                'confidence': 75,
+                'trend': 'rising' if predicted_price > current_price else 'falling',
                 'next_hour_range': {
                     'low': round(current_price * 0.9, 1),
                     'high': round(current_price * 1.2, 1)
                 }
             }
 
-            # Store prediction in database and send alert with feedback buttons
-            await self.send_price_alert(update.effective_chat.id, hourly_data, prediction_data)
+            price_data = {
+                'five_min_data': five_min_data,
+                'hourly_data': hourly_data
+            }
+
+            # Store prediction and send alert with feedback buttons
+            await self.send_price_alert(chat_id, price_data, prediction_data)
+            logger.info(f"Price check completed for chat_id: {chat_id}")
 
         except Exception as e:
             error_msg = f"❌ Error checking prices: {str(e)}"
@@ -325,9 +341,12 @@ class EnergyPriceBot:
             logger.error(f"Error running bot: {str(e)}")
             raise
         finally:
-            # Only attempt to stop if the application was started
             if self.application.running:
-                await self.application.stop()
+                try:
+                    await self.application.stop()
+                except Exception as e:
+                    logger.error(f"Error stopping application: {str(e)}")
+
 
 if __name__ == '__main__':
     try:

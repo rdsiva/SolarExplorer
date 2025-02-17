@@ -31,6 +31,14 @@ args = "Flask Server"
 task = "workflow.run"
 args = "Test Agents"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Telegram Bot Service"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Telegram Bot"
+
 [[workflows.workflow]]
 name = "Energy Price Bot"
 author = "agent"
@@ -87,6 +95,35 @@ task = "packager.installForAll"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "python test_agents.py"
+
+[[workflows.workflow]]
+name = "Telegram Bot Service"
+author = "agent"
+
+[workflows.workflow.metadata]
+agentRequireRestartOnSave = false
+
+[[workflows.workflow.tasks]]
+task = "packager.installForAll"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "python main.py"
+waitForPort = 5000
+
+[[workflows.workflow]]
+name = "Telegram Bot"
+author = "agent"
+
+[workflows.workflow.metadata]
+agentRequireRestartOnSave = false
+
+[[workflows.workflow.tasks]]
+task = "packager.installForAll"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "python run_bot.py"
 
 [[ports]]
 localPort = 5000
