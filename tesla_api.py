@@ -16,6 +16,21 @@ class TeslaAPI:
         self.refresh_token = None
         self.state = None
 
+        # Log the callback URL during initialization
+        try:
+            repl_owner = os.environ.get("REPL_OWNER", "")
+            repl_slug = os.environ.get("REPL_SLUG", "")
+            base_callback_url = f"https://{repl_slug}.{repl_owner}.repl.co/tesla/oauth/callback"
+
+            logger.info("=" * 80)
+            logger.info("Tesla OAuth Configuration")
+            logger.info("=" * 80)
+            logger.info("Add this callback URL to your Tesla Developer Console:")
+            logger.info(f"Callback URL: {base_callback_url}")
+            logger.info("=" * 80)
+        except Exception as e:
+            logger.error(f"Error generating callback URL during initialization: {str(e)}")
+
     def generate_auth_url(self, chat_id: str) -> str:
         """Generate OAuth authorization URL"""
         logger.info(f"Generating auth URL for chat_id: {chat_id}")
