@@ -1,0 +1,125 @@
+import requests
+import json
+from telegram import Update, Bot
+from telegram.ext import Application, CallbackContext, CommandHandler
+from flask_restx import Api, fields
+from datetime import datetime
+import os
+from dotenv import load_dotenv
+
+api = Api()
+
+load_dotenv()
+# Load environment variables
+TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
+MIN_RATE = float(os.getenv('MIN_RATE', 0))  # Default to 0 if not set
+
+print(f"TELEGRAM_BOT_TOKEN: {TELEGRAM_BOT_TOKEN}")
+print(f"TELEGRAM_CHAT_ID: {TELEGRAM_CHAT_ID}")  
+print(f"MIN_RATE: {MIN_RATE}")
+# Define API models for documentation
+five_min_price_model = api.model('ComedFineMinPrice', {
+    'price': fields.String,
+    'millisUTC': fields.String,
+    'LocalTimeinCST': fields.String(attribute=lambda x: (datetime.datetime.utcfromtimestamp(int(x['millisUTC']) / 1000) - datetime.timedelta(hours=6)).strftime("%m/%d/%Y %I:%M:%S %p")),
+})
+
+
+# Initialize the bot with your API token
+bot = Bot(token="7755995691:AAF-GJGtjV8DY6_3eogKVyCnhVmECtQswDM")
+
+# Define a function that sends a message when a website content has changed
+async def send_message_when_website_content_has_changed(context: CallbackContext):
+    global previous_content
+
+    try:
+        response = requests.get(webpage_url)
+        if response.status_code == 200:
+            response_data = response.json() 
+            current_content = json.dumps(response_data, indent=4)
+            # Parse the response JSON data 
+            # Print the parsed data 
+            print(f"LocalTimeinCST: {response_data[0]['price']}")
+            print(f"LocalTimeinCST: {response_data[0]['LocalTimeinCST']}")
+            #if previous_content != current_content:
+            if current_content != "":
+                if response_data[0]['price'] <="3.5":
+                    await context.bot.send_message(chat_id=context.job.chat_id, text=f'The Comed last five mins price has less than 0 cents! The price is {response_data[0]['price']} at {response_data[0]['LocalTimeinCST']}') 
+                else:
+                    await context.bot.send_message(chat_id=context.job.chat_id, text=f'The Comed last five mins price has greater than 0 cents! The price is {response_data[0]['price']} at {response_data[0]['LocalTimeinCST']}') 
+                #await context.bot.send_message(chat_id=context.job.context, text=f'The website content \n{webpage_url} \nhas changed!')
+            #previous_content = current_content
+    except Exception as e:
+        await context.bot.send_message(chat_id=context.job.chat_id, text=f'Five Mins job: Error retrieving data from the website: {e}')
+
+
+async def send_hourly_price_message_when_website_content_has_changed(context: CallbackContext):
+    global previous_content
+
+    try:
+        toadyDate = datetime.now().strftime("%Y%m%d")
+        response = requests.get("https://srddev.pythonanywhere.com/api/hourlyprice?queryDate="+toadyDate)
+        if response.status_code == 200:
+            response_data = response.json() 
+            current_content = json.dumps(response_data, indent=4)
+            # Parse the response JSON data 
+            # Print the parsed data 
+            print(f"DateTime: {response_data[0]['DateTime']}")
+            print(f"DayAheadPrice: {response_data[0]['DayAheadPrice']}")
+            print(f"RealTimePrice: {response_data[0]['RealTimePrice']}")
+            #if previous_content != current_content:
+            if current_content != "":
+                current_time = datetime.now().strftime("%I:00 %p")
+                print("Current time:", current_time)
+                current_time_data = [entry for entry in response_data if entry["DateTime"].split(":")[0].zfill(2) + ":" + entry["DateTime"].split(":")[1] == current_time]
+                print("Current time data:", current_time_data)
+                if current_time_data[0]['RealTimePrice'] <="3.5":
+                    await context.bot.send_message(chat_id=context.job.chat_id, text=f'The Comed current hour price has less than 0 cents! The Realtime price is {current_time_data[0]['RealTimePrice']} and DayAhead price is {current_time_data[0]['DayAheadPrice']} at {current_time_data[0]['DateTime']}') 
+                else:
+                    await context.bot.send_message(chat_id=context.job.chat_id, text=f'The Comed current hour price has greater than 0 cents! The Real time price is {current_time_data[0]['RealTimePrice']} and DayAhead price is {current_time_data[0]['DayAheadPrice']} at {current_time_data[0]['DateTime']}') 
+                #await context.bot.send_message(chat_id=context.job.context, text=f'The website content \n{webpage_url} \nhas changed!')
+            #previous_content = current_content
+    except Exception as e:
+        await context.bot.send_message(chat_id=context.job.chat_id, text=f'Hourly Job: Error  retrieving data from the website: {e}')
+
+def is_url_valid(url_to_check):
+    try:
+        return requests.get("https://srddev.pythonanywhere.com/api/health").status_code == 200
+    except:
+        return False
+
+async def start_check_command(update: Update, context: CallbackContext):
+    global previous_content, webpage_url
+
+    polling_interval = 3600 # 60 minutes
+
+    job = context.chat_data.get('polling_job')
+    if job:
+        await update.message.reply_text('A polling job is already running!')
+    else:
+        previous_content = ""
+        webpage_url = context.args[0] if len(context.args) > 0 and is_url_valid(context.args[0]) else "https://srddev.pythonanywhere.com/api/fiveminPrice"
+        job = context.job_queue.run_repeating(send_message_when_website_content_has_changed, interval=polling_interval, first=0, chat_id=update.message.chat_id)
+        job = context.job_queue.run_repeating(send_hourly_price_message_when_website_content_has_changed, interval=polling_interval, first=0, chat_id=update.message.chat_id)
+        context.chat_data['polling_job'] = job
+        await update.message.reply_text(f'Polling job every {polling_interval} mins for the site has started!')
+
+async def stop_check_command(update: Update, context: CallbackContext):
+    job = context.chat_data.get('polling_job')
+    if job:
+        job.schedule_removal()
+        del context.chat_data['polling_job']
+        await update.message.reply_text('Polling job has stopped!')
+    else:
+        await update.message.reply_text('There is no active polling job!')
+
+def main():
+    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    application.add_handler(CommandHandler("start_check", start_check_command))
+    application.add_handler(CommandHandler("stop_check", stop_check_command))
+    application.run_polling()
+    
+    
+if __name__ == '__main__':
+    main()
