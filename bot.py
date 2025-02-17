@@ -23,16 +23,8 @@ app = Flask(__name__)
 CORS(app)
 app.config['SECRET_KEY'] = os.environ.get('SESSION_SECRET', 'dev-secret-key')
 
-# Get domain for webhook
-# For Replit, use the REPL_SLUG and REPL_OWNER environment variables
-REPL_SLUG = os.environ.get('REPL_SLUG')
-REPL_OWNER = os.environ.get('REPL_OWNER')
-
-if not (REPL_SLUG and REPL_OWNER):
-    raise ValueError("REPL_SLUG or REPL_OWNER environment variables are not set")
-
-# Construct the Replit domain URL
-WEBHOOK_URL = f"https://{REPL_SLUG}.{REPL_OWNER}.repl.co/telegram/webhook"
+# Set webhook URL
+WEBHOOK_URL = "https://comed-price-telegram-notification.onrender.com/telegram/webhook"
 logger.info(f"Using webhook URL: {WEBHOOK_URL}")
 
 # Initialize bot at module level
