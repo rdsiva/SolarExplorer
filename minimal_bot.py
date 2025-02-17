@@ -3,13 +3,15 @@ import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler, ConversationHandler, MessageHandler, filters
 import requests
-from datetime import datetime, timedelta, time
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from price_monitor import PriceMonitor
 from config import TELEGRAM_BOT_TOKEN
-from models import PriceHistory, UserPreferences
+from models import PriceHistory, UserPreferences, TeslaPreferences
 from app import app, db
 from price_prediction import price_predictor
+from tesla_api import TeslaAPI # Assuming TeslaAPI class is defined in tesla_api.py
+
 
 # Configure logging
 logging.basicConfig(
@@ -21,10 +23,18 @@ logger = logging.getLogger(__name__)
 
 # Conversation states
 THRESHOLD = 1
+TESLA_VEHICLE_ID = 2
+TESLA_MIN_BATTERY = 3
+TESLA_MAX_BATTERY = 4
+TESLA_PRICE_THRESHOLD = 5
+TESLA_EMAIL = 6
+TESLA_PASSWORD = 7
+TESLA_VEHICLE_SELECT = 8
 
-# Add the escape function at the top of the file, after imports
 def escape_markdown(text):
     """Escape special characters for MarkdownV2 format"""
+    if not isinstance(text, str):
+        text = str(text)
     characters_to_escape = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
     for char in characters_to_escape:
         text = text.replace(char, f'\\{char}')
@@ -45,6 +55,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/check - Check current prices\n"
         "/threshold - Set custom price alert threshold\n"
         "/preferences - Show your current preferences\n"
+        "/tesla_setup - Set up Tesla integration\n"
+        "/tesla_status - Check Tesla vehicle status\n"
+        "/tesla_update - Update Tesla preferences\n"
+        "/tesla_disable - Disable Tesla integration\n"
         "/help - Show this help message"
     )
     await update.message.reply_text(welcome_message)
@@ -53,25 +67,91 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send a message when the command /help is issued."""
     await start(update, context)
 
-async def show_preferences(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show current user preferences"""
+# Add logging statements for Tesla commands
+async def tesla_setup(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start Tesla integration setup with OAuth authentication"""
+    logger.info(f"Starting Tesla setup for chat_id: {update.effective_chat.id}")
+
+    try:
+        api = TeslaAPI()
+        auth_url = api.generate_auth_url(str(update.effective_chat.id))
+
+        keyboard = [[InlineKeyboardButton("🔐 Login with Tesla", url=auth_url)]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await update.message.reply_text(
+            "Let's set up Tesla integration!\n\n"
+            "1. Click the button below to log in with your Tesla account\n"
+            "2. Authorize this application\n"
+            "3. After authorization, return here and use /tesla_status to check your vehicle",
+            reply_markup=reply_markup
+        )
+
+        return ConversationHandler.END
+
+    except Exception as e:
+        logger.error(f"Error generating Tesla auth URL: {str(e)}")
+        await update.message.reply_text(
+            "❌ An error occurred while setting up Tesla integration.\n"
+            "Please try again later or contact support."
+        )
+        return ConversationHandler.END
+
+async def tesla_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Check Tesla vehicle status"""
     chat_id = update.effective_chat.id
+    logger.info(f"Checking Tesla status for chat_id: {chat_id}")
 
     with app.app_context():
-        prefs = UserPreferences.get_user_preferences(str(chat_id))
-        if prefs:
-            message = (
-                "🔧 Your Current Preferences:\n\n"
-                f"Price Threshold: {prefs.price_threshold}¢\n"
-                f"Alert Frequency: {prefs.alert_frequency}\n"
-                f"Active: {'Yes' if prefs.is_active else 'No'}\n"
+        prefs = TeslaPreferences.query.filter_by(chat_id=str(chat_id)).first()
+        if not prefs:
+            logger.info(f"No Tesla preferences found for chat_id: {chat_id}")
+            await update.message.reply_text(
+                "❌ Tesla integration not set up.\n"
+                "Use /tesla_setup to configure your vehicle."
             )
-            if prefs.start_time and prefs.end_time:
-                message += f"Alert Window: {prefs.start_time.strftime('%I:%M %p')} - {prefs.end_time.strftime('%I:%M %p')}"
-        else:
-            message = "❌ No preferences found. Use /start to set up your preferences."
+            return
 
-    await update.message.reply_text(message)
+        logger.info(f"Found Tesla preferences for chat_id: {chat_id}, enabled: {prefs.enabled}")
+        if not prefs.enabled:
+            await update.message.reply_text(
+                "❌ Tesla integration is disabled.\n"
+                "Use /tesla_setup to re-enable."
+            )
+            return
+
+        api = TeslaAPI()
+        api.access_token = prefs.access_token
+        api.refresh_token = prefs.refresh_token
+
+        vehicle_data = api.get_vehicle_data(prefs.vehicle_id)
+        if not vehicle_data:
+            await update.message.reply_text(
+                "❌ Could not fetch vehicle data.\n"
+                "Please try again or use /tesla_setup to reconfigure."
+            )
+            return
+
+        battery_level = vehicle_data.get('battery_level', 'Unknown')
+        charging_state = vehicle_data.get('charging_state', 'Unknown')
+        time_to_full = vehicle_data.get('time_to_full_charge', 'Unknown')
+
+        message = (
+            "🚗 Tesla Vehicle Status\n\n"
+            f"Battery Level: {battery_level}%\n"
+            f"Charging State: {charging_state}\n"
+            f"Time to Full: {time_to_full} hours\n\n"
+            f"Min Battery: {prefs.min_battery_level}%\n"
+            f"Max Battery: {prefs.max_battery_level}%\n"
+            f"Price Threshold: {prefs.price_threshold}¢/kWh"
+        )
+
+        await update.message.reply_text(message)
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Cancel the current conversation."""
+    await update.message.reply_text("Operation cancelled.")
+    return ConversationHandler.END
 
 async def set_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start the threshold setting conversation."""
@@ -97,7 +177,6 @@ async def save_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "You'll receive alerts when prices exceed this threshold."
         )
         return ConversationHandler.END
-
     except ValueError:
         await update.message.reply_text(
             "❌ Please enter a valid number (e.g., 3.5)\n"
@@ -105,12 +184,6 @@ async def save_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return THRESHOLD
 
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Cancel the current conversation."""
-    await update.message.reply_text("Operation cancelled.")
-    return ConversationHandler.END
-
-@app.route('/')
 async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Check current prices with ML predictions and pattern analysis"""
     try:
@@ -293,6 +366,28 @@ async def handle_prediction_feedback(update: Update, context: ContextTypes.DEFAU
             parse_mode="MarkdownV2"
         )
 
+async def show_preferences(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show current user preferences"""
+    chat_id = update.effective_chat.id
+
+    with app.app_context():
+        prefs = UserPreferences.get_user_preferences(str(chat_id))
+        if prefs:
+            message = (
+                "🔧 Your Current Preferences:\n\n"
+                f"Price Threshold: {prefs.price_threshold}¢\n"
+                f"Alert Frequency: {prefs.alert_frequency}\n"
+                f"Active: {'Yes' if prefs.is_active else 'No'}\n"
+            )
+            if prefs.start_time and prefs.end_time:
+                message += f"Alert Window: {prefs.start_time.strftime('%I:%M %p')} - {prefs.end_time.strftime('%I:%M %p')}"
+        else:
+            message = "❌ No preferences found. Use /start to set up your preferences."
+
+    await update.message.reply_text(message)
+
+
+
 def main():
     """Start the bot."""
     try:
@@ -300,7 +395,7 @@ def main():
         application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
         # Add conversation handler for setting threshold
-        conv_handler = ConversationHandler(
+        threshold_handler = ConversationHandler(
             entry_points=[CommandHandler('threshold', set_threshold)],
             states={
                 THRESHOLD: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_threshold)],
@@ -308,12 +403,22 @@ def main():
             fallbacks=[CommandHandler('cancel', cancel)],
         )
 
-        # Add handlers with updated command names
+        # Add conversation handler for Tesla setup
+        tesla_setup_handler = ConversationHandler(
+            entry_points=[CommandHandler('tesla_setup', tesla_setup)],
+            states={}, # No states needed for OAuth flow
+            fallbacks=[CommandHandler('cancel', cancel)],
+        )
+
+        # Add handlers
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CommandHandler("help", help_command))
         application.add_handler(CommandHandler("check", check))
         application.add_handler(CommandHandler("preferences", show_preferences))
-        application.add_handler(conv_handler)
+        application.add_handler(CommandHandler("tesla_status", tesla_status))
+        application.add_handler(CommandHandler("tesla_disable", tesla_disable))
+        application.add_handler(threshold_handler)
+        application.add_handler(tesla_setup_handler)
         application.add_handler(CallbackQueryHandler(handle_prediction_feedback))
 
         # Start the bot

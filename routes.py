@@ -1,10 +1,12 @@
-from flask import jsonify, render_template
+from flask import jsonify, render_template, request, redirect
 from datetime import datetime, timedelta
 import numpy as np
 from app import app
 from providers.comed_provider import ComedProvider
-from models import UserPreferences, UserAnalytics, SavingsInsight, PriceHistory
+from models import UserPreferences, UserAnalytics, SavingsInsight, PriceHistory, TeslaPreferences
+from agents.tesla_charging_agent import TeslaAPI
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -204,3 +206,54 @@ def get_user_insights(chat_id):
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+@app.route('/tesla/oauth/callback')
+def tesla_oauth_callback():
+    """Handle Tesla OAuth callback"""
+    try:
+        code = request.args.get('code')
+        state = request.args.get('state')
+        chat_id = request.args.get('chat_id')
+
+        if not all([code, state, chat_id]):
+            logger.error("Missing required OAuth parameters")
+            return render_template('error.html', 
+                message="Invalid OAuth callback parameters"), 400
+
+        # Verify state matches stored state
+        prefs = TeslaPreferences.get_preferences(chat_id)
+        if not prefs or prefs.oauth_state != state:
+            logger.error(f"OAuth state mismatch for chat_id: {chat_id}")
+            return render_template('error.html', 
+                message="Invalid OAuth state parameter"), 400
+
+        # Exchange code for tokens
+        api = TeslaAPI()
+        result = api.exchange_code_for_token(code, state)
+        if not result['success']:
+            logger.error(f"Token exchange failed: {result.get('error')}")
+            return render_template('error.html', 
+                message="Failed to complete authentication"), 400
+
+        # Update Tesla preferences with tokens
+        prefs.update_auth_tokens(
+            access_token=result['access_token'],
+            refresh_token=result['refresh_token']
+        )
+
+        # Redirect to success page
+        repl_owner = os.environ.get("REPL_OWNER", "")
+        repl_slug = os.environ.get("REPL_SLUG", "")
+        success_url = f"https://{repl_slug}.{repl_owner}.repl.co/tesla/success"
+        return redirect(success_url)
+
+    except Exception as e:
+        logger.error(f"Error in Tesla OAuth callback: {str(e)}")
+        return render_template('error.html', 
+            message="An error occurred during authentication"), 500
+
+@app.route('/tesla/success')
+def tesla_success():
+    """Display Tesla authentication success page"""
+    return render_template('tesla_success.html', 
+        message="Tesla authentication successful! You can now close this window and return to the Telegram bot.")

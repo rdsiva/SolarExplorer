@@ -217,6 +217,10 @@ class TeslaPreferences(db.Model):
     chat_id = db.Column(db.String(100), db.ForeignKey('user_preferences.chat_id'), nullable=False)
     enabled = db.Column(db.Boolean, default=False)
     vehicle_id = db.Column(db.String(100), nullable=True)
+    access_token = db.Column(db.String(500), nullable=True)
+    refresh_token = db.Column(db.String(500), nullable=True)
+    token_expiry = db.Column(db.DateTime, nullable=True)
+    oauth_state = db.Column(db.String(100), nullable=True)  # Added for OAuth flow
     min_battery_level = db.Column(db.Integer, default=20)
     max_battery_level = db.Column(db.Integer, default=80)
     price_threshold = db.Column(db.Float, default=3.5)
@@ -255,6 +259,13 @@ class TeslaPreferences(db.Model):
         """Update the vehicle status and timestamp"""
         self.last_vehicle_status = status_data
         self.last_status_update = datetime.utcnow()
+        db.session.commit()
+
+    def update_auth_tokens(self, access_token: str, refresh_token: str) -> None:
+        """Update authentication tokens"""
+        self.access_token = access_token
+        self.refresh_token = refresh_token
+        self.token_expiry = datetime.utcnow() + timedelta(hours=6)  # Tesla tokens typically expire in 8 hours
         db.session.commit()
 
     def is_preferred_charging_time(self) -> bool:
