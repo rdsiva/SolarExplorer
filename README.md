@@ -1,21 +1,3 @@
-# Core dependencies
-flask-sqlalchemy==3.1.1
-python-telegram-bot==20.7
-sqlalchemy==2.0.23
-nest-asyncio==1.5.8
-flask-wtf==1.2.1
-scipy==1.11.4
-requests==2.31.0
-pandas==2.1.4
-scikit-learn==1.3.2
-python-dotenv==1.0.0
-psycopg2-binary==2.9.9
-
-# Additional utilities
-beautifulsoup4==4.12.2
-trafilatura==1.6.1
-```
-
 ## Database Setup
 
 ### Configuration
@@ -66,6 +48,77 @@ flask db upgrade
 ```
 
 Note: Never manually write SQL migrations. Use Flask-SQLAlchemy's migration tools to handle schema changes safely.
+
+## Project Structure
+
+## Core Files
+```
+├── main.py              # Main Flask application entry point
+├── minimal_bot.py       # Simplified Telegram bot implementation
+├── price_scheduler.py   # Price monitoring scheduler
+├── app.py              # Flask app configuration and database setup
+├── config.py           # Configuration and environment variables
+├── models.py           # SQLAlchemy database models
+└── requirements.txt    # Python dependencies
+```
+
+## Module System
+```
+modules/
+├── __init__.py
+├── base_module.py          # Base class for all modules
+├── price_monitor_module.py # Real-time price monitoring
+├── pattern_analysis.py     # Price pattern analysis
+├── ml_prediction.py        # ML-based predictions
+└── module_manager.py       # Module management system
+```
+
+## Call Hierarchy
+
+1. Application Startup:
+   ```
+   main.py
+   ├── app.py (Flask initialization)
+   │   ├── config.py (Load configuration)
+   │   └── models.py (Initialize database)
+   └── modules/__init__.py (Load modules)
+   ```
+
+2. Telegram Bot Flow:
+   ```
+   minimal_bot.py
+   ├── modules/price_monitor_module.py
+   │   └── modules/base_module.py
+   └── config.py
+   ```
+
+3. Price Monitoring:
+   ```
+   price_scheduler.py
+   ├── modules/price_monitor_module.py
+   ├── modules/pattern_analysis.py (optional)
+   └── modules/ml_prediction.py (optional)
+   ```
+
+## Key Components
+
+1. **Web Interface (Flask)**
+   - `main.py`: Flask application entry point
+   - `app.py`: Application configuration
+   - `routes.py`: Web endpoints
+
+2. **Telegram Bot**
+   - `minimal_bot.py`: Core bot functionality
+   - Command handlers for /start, /check, /help
+
+3. **Price Monitoring**
+   - `modules/price_monitor_module.py`: Price data collection
+   - `price_scheduler.py`: Scheduled monitoring
+
+4. **Database**
+   - `models.py`: SQLAlchemy models
+   - `app.py`: Database initialization
+
 
 ## Running the Application
 
