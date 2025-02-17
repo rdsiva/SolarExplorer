@@ -21,10 +21,6 @@ args = "Telegram Price Monitor"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
-args = "Flask Server"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
 args = "Test Agents"
 
 [[workflows.workflow.tasks]]
@@ -39,6 +35,10 @@ args = "Tesla Tests"
 task = "workflow.run"
 args = "Telegram Bot"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Telegram Webhook Server"
+
 [[workflows.workflow]]
 name = "Telegram Price Monitor"
 author = "agent"
@@ -52,21 +52,6 @@ task = "packager.installForAll"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "python minimal_bot.py"
-
-[[workflows.workflow]]
-name = "Flask Server"
-author = "agent"
-
-[workflows.workflow.metadata]
-agentRequireRestartOnSave = false
-
-[[workflows.workflow.tasks]]
-task = "packager.installForAll"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "python main.py"
-waitForPort = 5000
 
 [[workflows.workflow]]
 name = "Test Agents"
@@ -123,6 +108,21 @@ task = "packager.installForAll"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "python minimal_bot.py"
+
+[[workflows.workflow]]
+name = "Telegram Webhook Server"
+author = "agent"
+
+[workflows.workflow.metadata]
+agentRequireRestartOnSave = false
+
+[[workflows.workflow.tasks]]
+task = "packager.installForAll"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "python bot.py"
+waitForPort = 5000
 
 [[ports]]
 localPort = 5000
