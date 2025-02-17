@@ -2,7 +2,7 @@ import os
 from flask import Flask, render_template, jsonify, request
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.orm import DeclarativeBase
-from modules import ModuleManager, PriceMonitorModule, PatternAnalysisModule, MLPredictionModule
+from modules import ModuleManager, PriceMonitorModule, PatternAnalysisModule, MLPredictionModule, DashboardModule
 import logging
 
 # Configure logging
@@ -26,7 +26,7 @@ try:
     if not os.environ.get("DATABASE_URL"):
         logger.error("DATABASE_URL environment variable is not set")
 
-    app.secret_key = os.environ.get("SESSION_SECRET", "default-dev-secret")  # Add default for development
+    app.secret_key = os.environ.get("SESSION_SECRET", "default-dev-secret")
 
     # Configure the database
     logger.info("Configuring database connection...")
@@ -43,16 +43,22 @@ try:
     price_module = PriceMonitorModule()
     pattern_module = PatternAnalysisModule()
     ml_module = MLPredictionModule()
+    dashboard_module = DashboardModule()
 
     # Register modules
     logger.info("Registering modules...")
     module_manager.register_module(price_module)
     module_manager.register_module(pattern_module)
     module_manager.register_module(ml_module)
+    module_manager.register_module(dashboard_module)
 
     # Enable price monitoring by default (required)
     logger.info("Enabling required price monitor module...")
     module_manager.enable_module("price_monitor")
+
+    # Enable dashboard module by default
+    logger.info("Enabling dashboard module...")
+    module_manager.enable_module("dashboard")
 
     logger.info("Initializing database...")
     db.init_app(app)
@@ -67,7 +73,28 @@ try:
             return render_template('module_manager.html', modules=modules)
         except Exception as e:
             logger.error(f"Error in module management view: {str(e)}", exc_info=True)
-            return jsonify({"error": str(e)}), 500
+            return f"Error loading module management: {str(e)}", 500
+
+    @app.route('/dashboard')
+    def dashboard():
+        """Main dashboard view"""
+        try:
+            logger.info("Accessing dashboard view")
+            from models import PriceHistory
+
+            # Get recent price history
+            recent_prices = PriceHistory.query.order_by(
+                PriceHistory.timestamp.desc()
+            ).limit(24).all()  # Last 24 records
+
+            return render_template(
+                'dashboard.html',
+                prices=recent_prices,
+                modules=module_manager.get_all_modules()
+            )
+        except Exception as e:
+            logger.error(f"Error in dashboard view: {str(e)}", exc_info=True)
+            return f"Error loading dashboard: {str(e)}", 500
 
     @app.route('/api/modules/<module_name>', methods=['POST'])
     def toggle_module(module_name):

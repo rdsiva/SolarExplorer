@@ -1,6 +1,5 @@
 from app import app
-from flask import redirect, url_for
-import routes  # Import routes to register them with Flask
+from flask import redirect
 import logging
 
 # Configure logging
@@ -12,7 +11,7 @@ def root():
     """Root route handler"""
     try:
         logger.info("Redirecting to module management interface")
-        return redirect('/module-management')  # Use direct path instead of url_for
+        return redirect('/module-management')
     except Exception as e:
         logger.error(f"Error in root route: {str(e)}", exc_info=True)
         return "Error: Could not load module management interface", 500

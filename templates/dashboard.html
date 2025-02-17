@@ -11,17 +11,6 @@
     <div class="container py-4">
         <h1 class="mb-4">Energy Analytics Dashboard</h1>
 
-        <!-- User Info -->
-        <div class="card mb-4">
-            <div class="card-body">
-                <h5 class="card-title">User Preferences</h5>
-                <p class="card-text">
-                    Price Alert Threshold: {{ user.price_threshold }}¢<br>
-                    Alert Frequency: {{ user.alert_frequency }}
-                </p>
-            </div>
-        </div>
-
         <!-- Price Trends -->
         <div class="row mb-4">
             <div class="col-md-8">
@@ -36,58 +25,12 @@
                 <div class="card">
                     <div class="card-body">
                         <h5 class="card-title">Current Analytics</h5>
-                        {% if analytics %}
-                            <p>Average Daily Price: {{ "%.2f"|format(analytics.avg_daily_price) }}¢</p>
-                            <p>Monthly Trend: {{ analytics.monthly_price_trend|title }}</p>
-                            {% if analytics.peak_usage_time %}
-                                <p>Peak Usage Time: {{ analytics.peak_usage_time.strftime('%I:%M %p') }}</p>
-                            {% endif %}
+                        {% if prices %}
+                            <p>Latest Price: {{ "%.2f"|format(prices[0].hourly_price) }}¢</p>
+                            <p>Average: {{ "%.2f"|format(prices|map(attribute='hourly_price')|list|sum / prices|length) }}¢</p>
+                            <p>Timestamp: {{ prices[0].timestamp.strftime('%Y-%m-%d %I:%M %p') }}</p>
                         {% else %}
-                            <p>No analytics data available</p>
-                        {% endif %}
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Optimal Usage Times -->
-        <div class="row mb-4">
-            <div class="col-md-6">
-                <div class="card">
-                    <div class="card-body">
-                        <h5 class="card-title">Best Times to Use Energy</h5>
-                        {% if best_hours %}
-                            <div class="list-group">
-                            {% for hour, stats in best_hours %}
-                                <div class="list-group-item">
-                                    <h6>{{ '%02d:00'|format(hour) }} - {{ '%02d:00'|format((hour + 1) % 24) }}</h6>
-                                    <p class="mb-1">Average Price: {{ stats.average }}¢</p>
-                                    <small>Range: {{ stats.min }}¢ - {{ stats.max }}¢</small>
-                                </div>
-                            {% endfor %}
-                            </div>
-                        {% else %}
-                            <p>No data available</p>
-                        {% endif %}
-                    </div>
-                </div>
-            </div>
-            <div class="col-md-6">
-                <div class="card">
-                    <div class="card-body">
-                        <h5 class="card-title">Times to Avoid</h5>
-                        {% if worst_hours %}
-                            <div class="list-group">
-                            {% for hour, stats in worst_hours %}
-                                <div class="list-group-item">
-                                    <h6>{{ '%02d:00'|format(hour) }} - {{ '%02d:00'|format((hour + 1) % 24) }}</h6>
-                                    <p class="mb-1">Average Price: {{ stats.average }}¢</p>
-                                    <small>Range: {{ stats.min }}¢ - {{ stats.max }}¢</small>
-                                </div>
-                            {% endfor %}
-                            </div>
-                        {% else %}
-                            <p>No data available</p>
+                            <p>No price data available</p>
                         {% endif %}
                     </div>
                 </div>
@@ -99,76 +42,10 @@
             <div class="card-body">
                 <h5 class="card-title">Daily Price Patterns</h5>
                 <div class="row">
-                    <div class="col-md-6">
+                    <div class="col-md-12">
                         <canvas id="dailyPatternsChart"></canvas>
                     </div>
-                    <div class="col-md-6">
-                        <div class="table-responsive">
-                            <table class="table table-sm">
-                                <thead>
-                                    <tr>
-                                        <th>Day</th>
-                                        <th>Avg</th>
-                                        <th>Min</th>
-                                        <th>Max</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {% for day, stats in daily_stats.items() %}
-                                    <tr>
-                                        <td>{{ day }}</td>
-                                        <td>{{ stats.average }}¢</td>
-                                        <td>{{ stats.min }}¢</td>
-                                        <td>{{ stats.max }}¢</td>
-                                    </tr>
-                                    {% endfor %}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
                 </div>
-            </div>
-        </div>
-
-        <!-- Savings Potential Section -->
-        <div class="card mb-4">
-            <div class="card-body">
-                <h5 class="card-title">💰 Savings Potential</h5>
-                <div class="alert alert-success">
-                    <h4 class="alert-heading">Weekly Savings Potential: ${{ "%.2f"|format(weekly_savings_potential) }}</h4>
-                    <p>By optimizing your energy usage based on price patterns, you could save this amount weekly.</p>
-                </div>
-            </div>
-        </div>
-
-
-        <!-- Savings Insights -->
-        <div class="card mb-4">
-            <div class="card-body">
-                <h5 class="card-title">🎯 Personalized Insights</h5>
-                {% if insights %}
-                    {% for insight in insights %}
-                    <div class="alert {% if insight.impact_score >= 80 %}alert-danger{% elif insight.impact_score >= 50 %}alert-warning{% else %}alert-info{% endif %} mb-3">
-                        <div class="d-flex justify-content-between align-items-start">
-                            <div>
-                                <h6 class="alert-heading">💡 Potential Savings: ${{ "%.2f"|format(insight.potential_savings) }}</h6>
-                                <p class="mb-1">{{ insight.description }}</p>
-                                <div class="progress mt-2" style="height: 5px;">
-                                    <div class="progress-bar" role="progressbar" style="width: {{ insight.impact_score }}%" 
-                                         aria-valuenow="{{ insight.impact_score }}" aria-valuemin="0" aria-valuemax="100">
-                                    </div>
-                                </div>
-                                <small class="text-muted">Impact Score: {{ insight.impact_score }}/100</small>
-                            </div>
-                            <button class="btn btn-sm btn-outline-success" onclick="markImplemented({{ insight.id }})">
-                                ✓ Mark as Implemented
-                            </button>
-                        </div>
-                    </div>
-                    {% endfor %}
-                {% else %}
-                    <p>No savings insights available yet. Check back soon!</p>
-                {% endif %}
             </div>
         </div>
     </div>
@@ -179,10 +56,10 @@
         new Chart(ctx, {
             type: 'line',
             data: {
-                labels: {{ price_history|map(attribute='timestamp')|list|tojson }},
+                labels: {{ prices|map(attribute='timestamp')|map('strftime', '%I:%M %p')|list|tojson }},
                 datasets: [{
                     label: 'Price (¢/kWh)',
-                    data: {{ price_history|map(attribute='hourly_price')|list|tojson }},
+                    data: {{ prices|map(attribute='hourly_price')|list|tojson }},
                     borderColor: 'rgb(75, 192, 192)',
                     tension: 0.1
                 }]
@@ -207,16 +84,18 @@
             }
         });
 
-        // Initialize daily patterns chart
+        // Initialize daily patterns chart (24-hour view)
         const dailyCtx = document.getElementById('dailyPatternsChart').getContext('2d');
-        const dailyStats = {{ daily_stats|tojson }};
+        const dailyPrices = {{ prices|map(attribute='hourly_price')|list|tojson }};
+        const dailyLabels = {{ prices|map(attribute='timestamp')|map('strftime', '%I %p')|list|tojson }};
+
         new Chart(dailyCtx, {
             type: 'bar',
             data: {
-                labels: Object.keys(dailyStats),
+                labels: dailyLabels,
                 datasets: [{
-                    label: 'Average Price (¢/kWh)',
-                    data: Object.values(dailyStats).map(stats => stats.average),
+                    label: 'Price (¢/kWh)',
+                    data: dailyPrices,
                     backgroundColor: 'rgba(75, 192, 192, 0.2)',
                     borderColor: 'rgb(75, 192, 192)',
                     borderWidth: 1
@@ -229,17 +108,12 @@
                         beginAtZero: true,
                         title: {
                             display: true,
-                            text: 'Average Price (¢/kWh)'
+                            text: 'Price (¢/kWh)'
                         }
                     }
                 }
             }
         });
-
-        function markImplemented(insightId) {
-          // Add your implementation logic here to mark the insight as implemented.  This might involve an AJAX call to your backend.
-          console.log("Insight " + insightId + " marked as implemented");
-        }
     </script>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
