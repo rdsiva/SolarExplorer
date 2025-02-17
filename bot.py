@@ -156,15 +156,26 @@ class EnergyPriceBot:
 
     async def send_price_alert(self, chat_id: int, price_data: dict, prediction_data: dict = None):
         """Send price alert with feedback buttons"""
+        price_record_id = None
+
+        # Store prediction in database first if available
+        if prediction_data and prediction_data.get('short_term_prediction'):
+            with app.app_context():
+                price_record = PriceHistory.add_price_data(
+                    hourly_price=float(price_data.get('price', 0)),
+                    predicted_price=prediction_data['short_term_prediction'],
+                    prediction_confidence=prediction_data['confidence']
+                )
+                price_record_id = price_record.id
+
         message = self._format_price_message(price_data, prediction_data)
 
-        # Only add feedback buttons if there's a prediction
-        if prediction_data and prediction_data.get('short_term_prediction'):
-            # Create inline keyboard with feedback buttons
+        # Only add feedback buttons if there's a prediction and record ID
+        if price_record_id is not None:
             keyboard = [
                 [
-                    InlineKeyboardButton("✅ Accurate", callback_data=f"feedback_accurate_{prediction_data['timestamp']}"),
-                    InlineKeyboardButton("❌ Inaccurate", callback_data=f"feedback_inaccurate_{prediction_data['timestamp']}")
+                    InlineKeyboardButton("✅ Accurate", callback_data=f"feedback_accurate_{price_record_id}"),
+                    InlineKeyboardButton("❌ Inaccurate", callback_data=f"feedback_inaccurate_{price_record_id}")
                 ]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -188,12 +199,12 @@ class EnergyPriceBot:
         await query.answer()  # Acknowledge the button click
 
         try:
-            feedback_type, timestamp = query.data.split('_')[1:]  # feedback_accurate_timestamp or feedback_inaccurate_timestamp
+            feedback_type, record_id = query.data.split('_')[1:]  # feedback_accurate_id or feedback_inaccurate_id
             accuracy = 1.0 if feedback_type == 'accurate' else 0.0
 
             # Update prediction accuracy in database
             with app.app_context():
-                success = PriceHistory.update_prediction_accuracy(timestamp, accuracy)
+                success = PriceHistory.update_prediction_accuracy(int(record_id), accuracy)
 
                 if success:
                     feedback_msg = "✅ Thank you for your feedback! This helps improve future predictions."

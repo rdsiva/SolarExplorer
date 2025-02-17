@@ -29,6 +29,17 @@ class PricePredictionAgent(BaseAgent):
                     }
 
                 predictions = self.predict_future_prices(historical_records, feedback_records)
+
+                # Store prediction in database
+                with app.app_context():
+                    if historical_records:
+                        current_price = historical_records[0].hourly_price
+                        PriceHistory.add_price_data(
+                            hourly_price=current_price,
+                            predicted_price=predictions["short_term_prediction"],
+                            prediction_confidence=predictions["confidence"]
+                        )
+
                 return {
                     "status": "success",
                     "predictions": predictions
@@ -64,18 +75,18 @@ class PricePredictionAgent(BaseAgent):
         base_prediction = weighted_ma * (1 + momentum)
 
         # Adjust prediction based on feedback accuracy
-        avg_accuracy = np.mean([record.prediction_accuracy for record in feedback_records]) if feedback_records else 0.7
+        avg_accuracy = float(np.mean([record.prediction_accuracy for record in feedback_records])) if feedback_records else 0.7
         confidence_factor = min(avg_accuracy * 1.2, 1.0)  # Scale up accuracy but cap at 1.0
 
         # Calculate final prediction and confidence
-        final_prediction = base_prediction * (1 + (momentum * confidence_factor))
-        confidence = self._calculate_confidence(prices, feedback_records)
+        final_prediction = float(base_prediction * (1 + (momentum * confidence_factor)))  # Convert to float
+        confidence = float(self._calculate_confidence(prices, feedback_records))  # Convert to float
 
         return {
             "short_term_prediction": round(final_prediction, 2),
             "confidence": round(confidence, 1),
             "trend": trend,
-            "feedback_quality": round(avg_accuracy * 100, 1) if feedback_records else None
+            "feedback_quality": round(float(avg_accuracy * 100), 1) if feedback_records else None
         }
 
     def calculate_prediction_weights(self, feedback_records: List[PriceHistory]) -> Dict[str, float]:

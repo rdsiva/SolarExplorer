@@ -63,6 +63,17 @@ class NotificationAgent(BaseAgent):
         while self.notification_queue:
             notification = self.notification_queue.pop(0)
             try:
+                price_record_id = None
+                # Store prediction in database first if available
+                if notification.get("prediction", {}).get("short_term_prediction"):
+                    with app.app_context():
+                        price_record = PriceHistory.add_price_data(
+                            hourly_price=notification["price_data"]["hourly_data"]["price"],
+                            predicted_price=notification["prediction"]["short_term_prediction"],
+                            prediction_confidence=notification["prediction"]["confidence"]
+                        )
+                        price_record_id = price_record.id
+
                 # Format message with price data, analysis, and predictions
                 message = self._format_notification_message(
                     price_data=notification.get("price_data", {}),
@@ -70,18 +81,18 @@ class NotificationAgent(BaseAgent):
                     prediction=notification.get("prediction", {})
                 )
 
-                # Create feedback buttons if we have a prediction
+                # Create feedback buttons if we have a prediction and record ID
                 reply_markup = None
-                if notification.get("prediction", {}).get("short_term_prediction"):
+                if price_record_id is not None:
                     keyboard = [
                         [
                             InlineKeyboardButton(
                                 "✅ Accurate",
-                                callback_data=f"feedback_accurate_{notification['timestamp']}"
+                                callback_data=f"feedback_accurate_{price_record_id}"
                             ),
                             InlineKeyboardButton(
                                 "❌ Inaccurate",
-                                callback_data=f"feedback_inaccurate_{notification['timestamp']}"
+                                callback_data=f"feedback_inaccurate_{price_record_id}"
                             )
                         ]
                     ]
@@ -95,15 +106,6 @@ class NotificationAgent(BaseAgent):
                     reply_markup=reply_markup
                 )
                 logger.info(f"Sent notification to Telegram: {message}")
-
-                # Store prediction in database if available
-                if notification.get("prediction", {}).get("short_term_prediction"):
-                    with app.app_context():
-                        PriceHistory.add_price_data(
-                            hourly_price=notification["price_data"]["hourly_data"]["price"],
-                            predicted_price=notification["prediction"]["short_term_prediction"],
-                            prediction_confidence=notification["prediction"]["confidence"]
-                        )
 
             except Exception as e:
                 logger.error(f"Error sending notification: {str(e)}")
