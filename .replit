@@ -121,7 +121,7 @@ task = "packager.installForAll"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "python bot.py"
+args = "python -m hypercorn bot:app --bind 0.0.0.0:5000 --access-log -"
 waitForPort = 5000
 
 [[ports]]
