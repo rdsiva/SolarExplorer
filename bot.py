@@ -80,7 +80,6 @@ async def setup_webhook(app_instance: Application):
         logger.error(f"Failed to set up webhook: {e}", exc_info=True)
         return False
 
-@app.route('/telegram/webhook', methods=['POST'])  # Changed webhook route
 async def webhook():
     """Handle incoming webhook updates from Telegram"""
     try:
@@ -100,11 +99,13 @@ async def webhook():
 
         logger.info(f"Received webhook update: {update_data}")
 
-        # Process update
+        # Process update in the current event loop
+        loop = asyncio.get_event_loop()
         update = Update.de_json(update_data, application.bot)
+
         if update:
             logger.info(f"Processing update type: {update.effective_message.text if update.effective_message else 'No message'}")
-            await application.process_update(update)
+            await loop.create_task(application.process_update(update))
             logger.info("Update processed successfully")
             return jsonify({'status': 'ok'})
         else:
@@ -268,6 +269,12 @@ def create_app():
         # Initialize bot
         application = loop.run_until_complete(init_telegram_bot())
         logger.info(f"Bot initialized successfully: @{application.bot.username}")
+
+        # Set up error handlers
+        async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+            logger.error("Exception while handling an update:", exc_info=context.error)
+
+        application.add_error_handler(error_handler)
 
         return app
 
