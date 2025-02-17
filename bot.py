@@ -114,6 +114,64 @@ async def cmd_modules(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error listing modules: {e}")
         await update.message.reply_text("Sorry, there was an error listing the modules.")
 
+async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Check current prices and predictions"""
+    try:
+        module_manager = context.bot_data.get('module_manager')
+        if not module_manager:
+            await update.message.reply_text("Module system is not initialized")
+            return
+
+        # Get price monitor data (required module)
+        price_module = module_manager.get_module("price_monitor")
+        if not price_module:
+            await update.message.reply_text("Price monitor module is not available")
+            return
+
+        price_data = await price_module.get_notification_data()
+        if not price_data:
+            await update.message.reply_text("Unable to fetch price data")
+            return
+
+        # Construct message
+        message = "📊 Current Energy Prices:\n"
+        message += f"5-min price: {price_data.get('current_price', 'N/A')}\n"
+
+        if "hourly_data" in price_data and price_data["hourly_data"]:
+            message += f"Hourly price: {price_data['hourly_data'][0].get('price', 'N/A')}\n"
+
+        message += f"Alert Threshold: {price_data.get('alert_threshold', 'N/A')}\n\n"
+
+        # Add pattern analysis if enabled and data available
+        if "patterns" in price_data:
+            message += "🔍 Pattern Analysis:\n"
+            patterns = price_data["patterns"]
+            if patterns.get("detected"):
+                for pattern in patterns["detected"]:
+                    message += f"⚡ {pattern.replace('_', ' ').title()} detected\n"
+            message += "\n"
+
+        # Add ML predictions if enabled and data available
+        if "predictions" in price_data:
+            message += "🤖 ML Price Prediction:\n"
+            pred = price_data["predictions"]
+            if pred.get("predicted_price"):
+                message += f"Next hour: {pred['predicted_price']}¢\n"
+                if pred.get("confidence"):
+                    message += f"Confidence: {pred['confidence']}%\n"
+
+            # Add warning if price will exceed threshold
+            if price_data.get('current_price', 0) > price_data.get('alert_threshold', float('inf')):
+                message += "⚠️ Warning: Price exceeds threshold!\n"
+
+        message += f"\n🕒 Last Updated: {price_data.get('time', 'N/A')} CST"
+
+        await update.message.reply_text(message)
+
+    except Exception as e:
+        logger.error(f"Error checking prices: {e}")
+        await update.message.reply_text("Sorry, there was an error checking the prices.")
+
 async def run_bot():
     """Run the bot with proper async handling and retry logic"""
     retry_count = 0
@@ -142,6 +200,7 @@ async def run_bot():
                 "/help - Show this help message"
             )))
             application.add_handler(CommandHandler("modules", cmd_modules))
+            application.add_handler(CommandHandler("check", cmd_check)) # Added command handler here
 
             # Start the bot with proper initialization
             await application.initialize()
