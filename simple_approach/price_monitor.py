@@ -1,14 +1,15 @@
 import logging
 import requests
+import json
 from bs4 import BeautifulSoup
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Dict, Any
 
 # Configure logging
 logging.basicConfig(
-    level=logging.DEBUG,  # Changed to DEBUG for better troubleshooting
+    level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
@@ -21,88 +22,111 @@ class PriceData:
     day_ahead_price: Optional[float] = None
     hourly_average: Optional[float] = None
     trend: str = "unknown"
+    price_range: Optional[Dict[str, float]] = None
+
+    def __str__(self):
+        return f"PriceData(price={self.price}¢, day_ahead={self.day_ahead_price}¢, trend={self.trend})"
 
 class ComedPriceMonitor:
     """Simple price monitoring for ComEd"""
 
     def __init__(self):
-        self.pricing_table_url = "https://hourlypricing.comed.com/pricing-table/"
-        self.hourly_api_url = "https://hourlypricing.comed.com/api"
+        self.base_url = "https://hourlypricing.comed.com/api"
+        self.five_min_feed = f"{self.base_url}?type=5minutefeed"
+        self.hourly_average = f"{self.base_url}?type=currenthouraverage"
+        # Primary API endpoint
+        self.api_url = "https://srddev.pythonanywhere.com/api/hourlyprice"
 
     def get_current_prices(self) -> PriceData:
-        """Get current price data from ComEd"""
+        """Get current price data from API with fallback to web scraping"""
         try:
             logger.debug("Fetching current price data...")
 
-            # Get current price from pricing table
-            current_price = self._get_current_price()
-            logger.debug(f"Current price: {current_price}")
+            # Try primary API first
+            today_date = datetime.now().strftime("%Y%m%d")
+            api_url = f"{self.api_url}?queryDate={today_date}"
+            logger.debug(f"Requesting data from primary API: {api_url}")
 
-            # Get hourly average
-            hourly_average = self._get_hourly_average()
-            logger.debug(f"Hourly average: {hourly_average}")
+            response = requests.get(api_url)
+            response.raise_for_status()
 
-            # Determine trend
-            trend = self._calculate_trend(current_price, hourly_average)
-            logger.debug(f"Price trend: {trend}")
+            data = response.json()
+            logger.debug(f"Primary API response: {json.dumps(data, indent=2)}")
 
-            return PriceData(
-                price=current_price,
-                timestamp=datetime.now(ZoneInfo("America/Chicago")),
-                hourly_average=hourly_average,
-                trend=trend
-            )
+            if data and data.get('status') == 'success' and 'data' in data:
+                price_data = data['data'].get('price_data', {})
+                hourly_data = price_data.get('hourly_data', {})
+
+                if not hourly_data:
+                    raise ValueError("No hourly data found in API response")
+
+                price = float(hourly_data.get('price', 0))
+                day_ahead = float(hourly_data.get('day_ahead_price', 0))
+                trend = hourly_data.get('trend', 'unknown')
+                price_range = hourly_data.get('price_range', {})
+
+                logger.info(f"Got price from primary API: {price}¢")
+                return PriceData(
+                    price=price,
+                    timestamp=datetime.now(ZoneInfo("America/Chicago")),
+                    day_ahead_price=day_ahead,
+                    trend=trend,
+                    price_range=price_range
+                )
 
         except Exception as e:
-            logger.error(f"Error fetching price data: {str(e)}", exc_info=True)
-            raise
+            logger.error(f"Primary API failed, falling back to web scraping: {str(e)}")
+            try:
+                # Fallback to web scraping
+                price = self._get_current_price_fallback()
+                hourly_average = self._get_hourly_average()
+                trend = self._calculate_trend(price, hourly_average)
 
-    def _get_current_price(self) -> float:
-        """Get current price from pricing table"""
-        logger.debug("Fetching price from pricing table...")
-        response = requests.get(self.pricing_table_url)
-        response.raise_for_status()
+                logger.info(f"Got price from fallback: {price}¢")
+                return PriceData(
+                    price=price,
+                    timestamp=datetime.now(ZoneInfo("America/Chicago")),
+                    hourly_average=hourly_average,
+                    trend=trend
+                )
+            except Exception as fallback_error:
+                logger.error(f"Fallback also failed: {str(fallback_error)}", exc_info=True)
+                raise RuntimeError(f"Both primary and fallback methods failed: {str(fallback_error)}")
 
-        soup = BeautifulSoup(response.text, 'html.parser')
-        price_table = soup.find('table', {'class': 'pricing-table'})
-
-        if not price_table:
-            raise ValueError("Price table not found")
-
-        # Get first row after header
-        rows = price_table.find_all('tr')
-        if len(rows) < 2:  # Need at least header and one data row
-            raise ValueError("No price data found")
-
-        # Get the first data row (second row in table)
-        data_row = rows[1]
-        cols = data_row.find_all('td')
-        if len(cols) < 2:
-            raise ValueError("Invalid price table format")
-
-        price_text = cols[1].text.strip().replace('¢', '')
+    def _get_current_price_fallback(self) -> float:
+        """Fallback method to get current price using web scraping"""
+        logger.debug("Using fallback method to get current price...")
         try:
-            return float(price_text)
-        except ValueError as e:
-            logger.error(f"Error parsing price value '{price_text}': {str(e)}")
-            raise ValueError(f"Invalid price format: {price_text}")
+            response = requests.get(self.five_min_feed)
+            response.raise_for_status()
+            data = response.json()
+            logger.debug(f"Fallback API response: {json.dumps(data[:1], indent=2)}")  # Log first entry only
+
+            if not data:
+                raise ValueError("No price data in API response")
+
+            price = float(data[0]['price'])
+            logger.info(f"Successfully got fallback price: {price}¢")
+            return price
+
+        except Exception as e:
+            logger.error(f"Error in fallback price fetch: {str(e)}", exc_info=True)
+            raise
 
     def _get_hourly_average(self) -> Optional[float]:
         """Get current hour average price"""
         try:
-            logger.debug("Fetching hourly average from API...")
-            response = requests.get(f"{self.hourly_api_url}?type=currenthouraverage")
+            response = requests.get(self.hourly_average)
             response.raise_for_status()
             data = response.json()
+            logger.debug(f"Hourly average API response: {json.dumps(data, indent=2)}")
 
             if data and len(data) > 0:
-                try:
-                    return float(data[0]['price'])
-                except (KeyError, ValueError, TypeError) as e:
-                    logger.error(f"Error parsing API response: {e}")
-                    return None
+                avg = float(data[0]['price'])
+                logger.info(f"Got hourly average: {avg}¢")
+                return avg
 
-            logger.warning("No price data in API response")
+            logger.warning("No hourly average data found")
             return None
 
         except Exception as e:
@@ -136,8 +160,19 @@ class ComedPriceMonitor:
             f"Current Price: {price_data.price:.2f}¢"
         ]
 
+        if price_data.day_ahead_price:
+            price_diff = price_data.day_ahead_price - price_data.price
+            trend_indicator = "📈" if price_diff > 0 else "📉"
+            message.append(f"Day-Ahead Price: {price_data.day_ahead_price:.2f}¢ {trend_indicator}")
+
         if price_data.hourly_average:
             message.append(f"Hourly Average: {price_data.hourly_average:.2f}¢")
+
+        if price_data.price_range:
+            message.append(
+                f"Price Range: {price_data.price_range['min']:.2f}¢ - "
+                f"{price_data.price_range['max']:.2f}¢"
+            )
 
         message.extend([
             f"Trend: {price_data.trend.capitalize()}",

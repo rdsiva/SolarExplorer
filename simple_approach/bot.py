@@ -3,12 +3,13 @@ import logging
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from datetime import datetime
-from price_monitor import ComedPriceMonitor
+from simple_approach.price_monitor import ComedPriceMonitor  # Changed to absolute import
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler()]
 )
 logger = logging.getLogger(__name__)
 
@@ -33,12 +34,14 @@ async def check_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Check and display current prices"""
     try:
         await update.message.reply_text("🔍 Checking prices...")
-        
+        logger.info("Fetching current prices...")
+
         price_data = price_monitor.get_current_prices()
         message = price_monitor.format_message(price_data)
-        
+        logger.info(f"Price data fetched successfully: {price_data}")
+
         await update.message.reply_text(message)
-        
+
     except Exception as e:
         error_msg = f"❌ Error: {str(e)}"
         logger.error(error_msg, exc_info=True)
@@ -63,7 +66,7 @@ def main():
         # Start polling
         logger.info("Starting bot...")
         application.run_polling(drop_pending_updates=True)
-        
+
     except Exception as e:
         logger.error(f"Bot error: {str(e)}", exc_info=True)
         raise

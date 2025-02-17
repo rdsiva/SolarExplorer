@@ -104,7 +104,7 @@ task = "packager.installForAll"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "python simple_approach/bot.py"
+args = "python -m simple_approach.bot"
 
 [[ports]]
 localPort = 5000
