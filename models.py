@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 from app import db
 from typing import List, Optional, TYPE_CHECKING
+import numpy as np
 
 if TYPE_CHECKING:
     from typing import List
@@ -67,6 +68,44 @@ class PriceHistory(db.Model):
             PriceHistory.timestamp >= cutoff_time,
             PriceHistory.prediction_accuracy.isnot(None)
         ).order_by(PriceHistory.timestamp.desc()).all()
+
+    """Add feedback tracking to prediction model"""
+    @staticmethod
+    def get_prediction_feedback_stats(provider: str, days: int = 30) -> dict:
+        """Get statistics about prediction accuracy based on user feedback"""
+        cutoff_time = datetime.utcnow() - timedelta(days=days)
+        records = PriceHistory.query.filter(
+            PriceHistory.provider == provider,
+            PriceHistory.timestamp >= cutoff_time,
+            PriceHistory.prediction_accuracy.isnot(None)
+        ).order_by(PriceHistory.timestamp.desc()).all()
+
+        if not records:
+            return {
+                'accuracy': 0.0,
+                'total_predictions': 0,
+                'feedback_count': 0,
+                'confidence_correlation': 0.0
+            }
+
+        accuracies = [float(r.prediction_accuracy or 0.0) for r in records]
+        confidences = [float(r.prediction_confidence or 0.0) for r in records]
+
+        stats = {
+            'accuracy': float(sum(accuracies) / len(accuracies)) if accuracies else 0.0,
+            'total_predictions': len(records),
+            'feedback_count': len([a for a in accuracies if a is not None]),
+        }
+
+        # Calculate correlation between confidence and accuracy
+        if len(confidences) > 1 and any(confidences):
+            confidence_correlation = np.corrcoef(accuracies, confidences)[0, 1]
+            stats['confidence_correlation'] = float(confidence_correlation)
+        else:
+            stats['confidence_correlation'] = 0.0
+
+        return stats
+
 
 class UserPreferences(db.Model):
     id = db.Column(db.Integer, primary_key=True)
