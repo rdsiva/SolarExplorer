@@ -24,15 +24,15 @@ CORS(app)
 app.config['SECRET_KEY'] = os.environ.get('SESSION_SECRET', 'dev-secret-key')
 
 # Get domain for webhook
-PUBLIC_URL = os.environ.get('PUBLIC_URL')
-if not PUBLIC_URL:
-    raise ValueError("PUBLIC_URL environment variable is not set")
+# For Replit, use the REPL_SLUG and REPL_OWNER environment variables
+REPL_SLUG = os.environ.get('REPL_SLUG')
+REPL_OWNER = os.environ.get('REPL_OWNER')
 
-# Ensure URL starts with https://
-if not PUBLIC_URL.startswith('https://'):
-    PUBLIC_URL = f"https://{PUBLIC_URL}"
+if not (REPL_SLUG and REPL_OWNER):
+    raise ValueError("REPL_SLUG or REPL_OWNER environment variables are not set")
 
-WEBHOOK_URL = f"{PUBLIC_URL}/telegram/webhook"
+# Construct the Replit domain URL
+WEBHOOK_URL = f"https://{REPL_SLUG}.{REPL_OWNER}.repl.co/telegram/webhook"
 logger.info(f"Using webhook URL: {WEBHOOK_URL}")
 
 # Initialize bot at module level
@@ -88,6 +88,7 @@ async def webhook():
         # Log request details for debugging
         logger.info(f"Received webhook request from: {request.remote_addr}")
         logger.info(f"Headers: {dict(request.headers)}")
+        logger.info(f"Raw data: {request.get_data(as_text=True)}")
 
         # Validate request
         if not request.is_json:
@@ -99,7 +100,7 @@ async def webhook():
             logger.error("No data in webhook request")
             return jsonify({'status': 'error', 'message': 'No data provided'}), 400
 
-        logger.info(f"Received webhook update: {update_data}")
+        logger.info(f"Processing webhook update: {update_data}")
 
         # Process update
         update = Update.de_json(update_data, application.bot)
