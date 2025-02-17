@@ -8,7 +8,6 @@ from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
 from telegram.error import NetworkError, TelegramError
 from config import TELEGRAM_BOT_TOKEN
-from asgiref.sync import sync_to_async
 from urllib.parse import urlparse
 import re
 
@@ -55,14 +54,8 @@ logger.info(f"Using webhook URL base: {PUBLIC_URL}")
 # Initialize bot at module level
 application = None
 
-@app.before_request
-def log_request_info():
-    """Log details about each incoming request"""
-    logger.info('Headers: %s', request.headers)
-    logger.info('Body: %s', request.get_data())
-
 async def setup_webhook(app_instance: Application):
-    """Set up webhook for receiving updates with improved error handling"""
+    """Set up webhook for receiving updates"""
     try:
         webhook_url = f"{PUBLIC_URL}/telegram/webhook"
         logger.info(f"Setting up webhook at {webhook_url}")
@@ -77,7 +70,7 @@ async def setup_webhook(app_instance: Application):
             await app_instance.bot.delete_webhook(drop_pending_updates=True)
             await asyncio.sleep(1)
 
-        # Set new webhook with proper SSL validation
+        # Set new webhook
         logger.info("Setting up new webhook...")
         success = await app_instance.bot.set_webhook(
             url=webhook_url,
@@ -101,10 +94,17 @@ async def setup_webhook(app_instance: Application):
         logger.error(f"Failed to set up webhook: {str(e)}", exc_info=True)
         return False
 
+@app.before_request
+def log_request_info():
+    """Log details about each incoming request"""
+    logger.info('Headers: %s', request.headers)
+    logger.info('Body: %s', request.get_data())
+
 @app.route('/telegram/webhook', methods=['POST'])
 async def webhook():
     """Handle incoming webhook updates from Telegram"""
     try:
+        global application
         if not application:
             logger.error("Application not initialized")
             return jsonify({'status': 'error', 'message': 'Bot not initialized'}), 500
@@ -146,7 +146,7 @@ def root():
     })
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Start command handler with error handling"""
+    """Start command handler"""
     try:
         logger.info(f"Handling /start command from user {update.effective_user.id}")
         welcome_message = (
@@ -171,46 +171,6 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(help_message)
 
-async def init_telegram_bot():
-    """Initialize the Telegram bot with webhook support"""
-    try:
-        if not TELEGRAM_BOT_TOKEN:
-            raise ValueError("TELEGRAM_BOT_TOKEN environment variable is not set")
-
-        logger.info("Starting bot initialization...")
-
-        # Initialize bot
-        application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-
-        # Register command handlers
-        application.add_handler(CommandHandler("start", cmd_start))
-        application.add_handler(CommandHandler("help", cmd_help))
-
-        # Set up webhook with retries
-        MAX_RETRIES = 3
-        retry_count = 0
-        while retry_count < MAX_RETRIES:
-            if await setup_webhook(application):
-                logger.info("Webhook setup successful")
-                break
-            retry_count += 1
-            if retry_count < MAX_RETRIES:
-                logger.warning(f"Webhook setup failed, retrying... ({retry_count}/{MAX_RETRIES})")
-                await asyncio.sleep(2)
-
-        if retry_count == MAX_RETRIES:
-            raise ValueError("Failed to set up webhook after maximum retries")
-
-        # Initialize the application
-        await application.initialize()
-        logger.info("Bot initialization completed successfully")
-
-        return application
-
-    except Exception as e:
-        logger.error(f"Failed to initialize Telegram bot: {str(e)}", exc_info=True)
-        raise
-
 def create_app():
     """Factory function to create and initialize the Flask app"""
     global application
@@ -224,24 +184,17 @@ def create_app():
         asyncio.set_event_loop(loop)
 
         # Initialize bot
-        application = loop.run_until_complete(init_telegram_bot())
+        application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
-        if not application:
-            raise ValueError("Failed to initialize bot application")
+        # Register command handlers
+        application.add_handler(CommandHandler("start", cmd_start))
+        application.add_handler(CommandHandler("help", cmd_help))
+
+        # Initialize the application and set up webhook
+        loop.run_until_complete(application.initialize())
+        loop.run_until_complete(setup_webhook(application))
 
         logger.info(f"Bot initialized successfully: @{application.bot.username}")
-
-        # Set up error handlers
-        async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
-            """Global error handler for the bot"""
-            logger.error("Exception while handling an update:", exc_info=context.error)
-
-            if isinstance(context.error, NetworkError):
-                logger.error("Network error occurred")
-            elif isinstance(context.error, TelegramError):
-                logger.error("Telegram API error occurred")
-
-        application.add_error_handler(error_handler)
 
         return app
 
@@ -249,16 +202,11 @@ def create_app():
         logger.error(f"Failed to create app: {str(e)}", exc_info=True)
         raise
 
-def main():
-    """Main function to run the bot"""
+if __name__ == '__main__':
     try:
         logger.info("Starting bot server...")
         app = create_app()
         app.run(host='0.0.0.0', port=5000, debug=True)
-
     except Exception as e:
         logger.error(f"Bot failed to start: {str(e)}", exc_info=True)
         raise
-
-if __name__ == '__main__':
-    main()
