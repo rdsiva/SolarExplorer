@@ -49,12 +49,12 @@ class PriceMonitorModule(BaseModule):
             if not await self._update_price_data():
                 error_msg = "Failed to update price data"
                 logger.error(error_msg)
-                raise ModuleError("price_monitor", error_msg)
+                raise ModuleError(error_msg)
 
             if self.last_price is None:
                 error_msg = "No price data available"
                 logger.error(error_msg)
-                raise ModuleError("price_monitor", error_msg)
+                raise ModuleError(error_msg)
 
             result = {
                 "status": "success",
@@ -63,13 +63,10 @@ class PriceMonitorModule(BaseModule):
             }
             logger.info(f"Successfully processed price data: {result}")
             return result
-        except ModuleError as me:
-            logger.error(f"Module error in price monitor: {str(me)}")
-            raise  # Re-raise ModuleError for proper handling
         except Exception as e:
             error_msg = f"Unexpected error: {str(e)}"
             logger.error(error_msg)
-            raise ModuleError("price_monitor", error_msg)
+            raise ModuleError(error_msg)
 
     async def get_notification_data(self) -> Optional[Dict[str, Any]]:
         """Get price data for notifications"""
