@@ -1,6 +1,10 @@
 import logging
 from typing import Dict, Any, List
 from .base_agent import BaseAgent
+from telegram.ext import Application
+from telegram import Bot
+import os
+import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -8,6 +12,15 @@ class NotificationAgent(BaseAgent):
     def __init__(self):
         super().__init__("Notification")
         self.notification_queue: List[Dict[str, Any]] = []
+        self.bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
+        self.chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+        self.bot = None
+
+    async def start(self):
+        """Initialize the Telegram bot when starting the agent"""
+        await super().start()
+        self.bot = Bot(token=self.bot_token)
+        logger.info("Telegram bot initialized")
 
     async def process(self, message: Dict[str, Any]) -> Dict[str, Any]:
         if message.get("command") == "send_notification":
@@ -40,8 +53,94 @@ class NotificationAgent(BaseAgent):
         await self.process_queue()
 
     async def process_queue(self) -> None:
+        if not self.bot:
+            logger.error("Telegram bot not initialized")
+            return
+
         while self.notification_queue:
             notification = self.notification_queue.pop(0)
-            # Here we'll add the actual notification sending logic
-            # This could be Telegram, SMS, or other channels
-            logger.info(f"Processing notification: {notification}")
+            try:
+                # Format message with price data, analysis, and predictions
+                message = self._format_notification_message(
+                    price_data=notification.get("price_data", {}),
+                    analysis=notification.get("analysis", {}),
+                    prediction=notification.get("prediction", {})
+                )
+
+                # Send to Telegram
+                await self.bot.send_message(
+                    chat_id=self.chat_id,
+                    text=message,
+                    parse_mode='HTML'
+                )
+                logger.info(f"Sent notification to Telegram: {message}")
+            except Exception as e:
+                logger.error(f"Error sending notification: {str(e)}")
+                # Put the notification back in queue if sending failed
+                self.notification_queue.insert(0, notification)
+                break
+
+    def _format_notification_message(self, price_data: Dict[str, Any], analysis: Dict[str, Any], prediction: Dict[str, Any]) -> str:
+        five_min_data = price_data.get("five_min_data", {})
+        hourly_data = price_data.get("hourly_data", {})
+
+        current_price = analysis.get("current_price", 0)
+        average_price = analysis.get("average_price", 0)
+        price_diff = current_price - average_price
+
+        # Determine price status emoji and message
+        if price_diff <= -0.5:
+            status_emoji = "🟢"  # Green circle for good prices
+            price_status = "GOOD TIME TO USE POWER"
+        elif price_diff >= 1.0:
+            status_emoji = "🔴"  # Red circle for price spikes
+            price_status = "HIGH PRICE ALERT"
+        else:
+            status_emoji = "🟡"  # Yellow circle for normal prices
+            price_status = "NORMAL PRICE LEVELS"
+
+        message = (
+            f"{status_emoji} <b>Energy Price Alert: {price_status}</b>\n\n"
+            f"📊 <b>Current Prices:</b>\n"
+            f"• 5-min price: {five_min_data.get('price', 'N/A')}¢\n"
+            f"• Hourly price: {hourly_data.get('price', 'N/A')}¢\n\n"
+            f"📈 <b>Analysis:</b>\n"
+            f"• Trend: {analysis.get('price_trend', 'unknown')}\n"
+            f"• vs Average: {price_diff:+.1f}¢\n"
+            f"• Day Range: {analysis.get('min_price', 'N/A')}¢ - {analysis.get('max_price', 'N/A')}¢\n\n"
+        )
+
+        # Add price prediction if available
+        if prediction:
+            predicted_price = prediction.get("short_term_prediction")
+            confidence = prediction.get("confidence")
+            next_hour_range = prediction.get("next_hour_range", {})
+            trend = prediction.get("trend", "unknown")
+
+            if predicted_price is not None and confidence is not None:
+                message += (
+                    f"🔮 <b>Price Prediction:</b>\n"
+                    f"• Next hour: {predicted_price:.1f}¢\n"
+                    f"• Range: {next_hour_range.get('low', 'N/A')}¢ - {next_hour_range.get('high', 'N/A')}¢\n"
+                    f"• Confidence: {confidence}%\n"
+                    f"• Trend: {trend}\n\n"
+                )
+
+                # Add detailed recommendation based on prediction
+                if trend == "rising" and confidence >= 70:
+                    message += "⚠️ <b>Price Trend Warning:</b>\n"
+                    message += "Prices expected to rise. Consider using power now.\n\n"
+                elif trend == "falling" and confidence >= 70:
+                    message += "💡 <b>Price Trend Opportunity:</b>\n"
+                    message += "Prices expected to fall. Consider delaying usage if possible.\n\n"
+
+        # Add base recommendation based on current price status
+        if price_status == "GOOD TIME TO USE POWER":
+            message += "💡 <b>Recommendation:</b>\n"
+            message += "Consider running energy-intensive appliances now\n\n"
+        elif price_status == "HIGH PRICE ALERT":
+            message += "⚠️ <b>Recommendation:</b>\n"
+            message += "Delay non-essential power usage if possible\n\n"
+
+        message += f"⏰ Last Updated: {five_min_data.get('time', 'N/A')}"
+        return message

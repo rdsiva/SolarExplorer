@@ -23,6 +23,10 @@ args = "Energy Price Bot"
 task = "workflow.run"
 args = "Test Agents"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Telegram Price Monitor"
+
 [[workflows.workflow]]
 name = "Energy Price Bot"
 author = "agent"
@@ -50,3 +54,17 @@ task = "packager.installForAll"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "python test_agents.py"
+
+[[workflows.workflow]]
+name = "Telegram Price Monitor"
+author = "agent"
+
+[workflows.workflow.metadata]
+agentRequireRestartOnSave = false
+
+[[workflows.workflow.tasks]]
+task = "packager.installForAll"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "python test_telegram_alerts.py"

@@ -12,6 +12,9 @@ class PriceMonitor:
     def clean_price_string(price_str):
         """Clean price string by removing '¢' symbol and converting to float"""
         try:
+            # Handle 'n/a' values
+            if price_str.lower() == 'n/a':
+                return 0.0
             # Remove '¢' symbol and any whitespace
             cleaned = price_str.replace('¢', '').strip()
             return float(cleaned)
