@@ -1,9 +1,11 @@
+<replit_final_file>
 import os
 import logging
 from datetime import datetime
 import requests
 import json
 from .base_agent import BaseAgent
+from models import TeslaPreferences, UserPreferences
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -137,37 +139,6 @@ class TeslaChargingAgent(BaseAgent):
     def __init__(self):
         super().__init__("TeslaCharging")
         self.api = TeslaAPI()
-        self.price_threshold = float(os.environ.get("TESLA_CHARGE_PRICE_THRESHOLD", "3.5"))
-        self.preferred_start_hour = int(os.environ.get("TESLA_CHARGE_START_HOUR", "22"))
-        self.preferred_end_hour = int(os.environ.get("TESLA_CHARGE_END_HOUR", "6"))
-        self.emergency_min_battery = int(os.environ.get("TESLA_EMERGENCY_MIN_BATTERY", "20"))
-
-    def should_charge(self, current_price, battery_level):
-        """Determine if charging should occur based on price and time"""
-        current_hour = datetime.now().hour
-
-        # Emergency charging override if battery is too low
-        if battery_level <= self.emergency_min_battery:
-            logger.info(f"Emergency charging needed - Battery at {battery_level}% (below {self.emergency_min_battery}% threshold)")
-            return True
-
-        # Check if current time is within preferred charging hours
-        is_preferred_time = False
-        if self.preferred_start_hour > self.preferred_end_hour:  # Handles overnight periods
-            is_preferred_time = current_hour >= self.preferred_start_hour or current_hour < self.preferred_end_hour
-        else:
-            is_preferred_time = self.preferred_start_hour <= current_hour < self.preferred_end_hour
-
-        logger.info(f"Time check - Current hour: {current_hour}, Preferred window: {self.preferred_start_hour}-{self.preferred_end_hour}, Within window: {is_preferred_time}")
-
-        # Check if price is below threshold
-        is_price_good = current_price <= self.price_threshold
-        logger.info(f"Price check - Current: {current_price}¢/kWh, Threshold: {self.price_threshold}¢/kWh, Below threshold: {is_price_good}")
-
-        should_charge = is_price_good and is_preferred_time
-        logger.info(f"Charging decision - Should charge: {should_charge} (Price OK: {is_price_good}, Time OK: {is_preferred_time})")
-
-        return should_charge
 
     async def process(self, message):
         """Process messages according to BaseAgent interface"""
@@ -188,56 +159,68 @@ class TeslaChargingAgent(BaseAgent):
     async def process_price_update(self, price_data):
         """Process a price update and control charging accordingly"""
         try:
-            vehicle_id = os.environ.get("TESLA_VEHICLE_ID")
-            if not vehicle_id:
-                logger.error("No Tesla vehicle ID configured")
+            # Get all active Tesla preferences
+            active_preferences = TeslaPreferences.query.filter_by(enabled=True).all()
+            if not active_preferences:
+                logger.info("No active Tesla charging preferences found")
                 return {
-                    "status": "error",
-                    "message": "Tesla vehicle ID not configured"
+                    "status": "success",
+                    "message": "No active Tesla charging preferences",
+                    "data": {"active_users": 0}
                 }
 
-            vehicle_data = self.api.get_vehicle_data(vehicle_id)
-            if not vehicle_data:
-                return {
-                    "status": "error",
-                    "message": "Failed to get vehicle data from Tesla API"
-                }
-
+            results = []
             current_price = price_data.get('hourly_data', {}).get('price', 0)
-            logger.info(f"Processing price update - Vehicle: {vehicle_id}, Current battery: {vehicle_data['battery_level']}%, State: {vehicle_data['charging_state']}")
 
-            should_be_charging = self.should_charge(
-                current_price, 
-                vehicle_data['battery_level']
-            )
+            for prefs in active_preferences:
+                try:
+                    # Get vehicle data
+                    vehicle_data = self.api.get_vehicle_data(prefs.vehicle_id)
+                    if not vehicle_data:
+                        logger.error(f"Failed to get vehicle data for {prefs.vehicle_id}")
+                        continue
 
-            if should_be_charging and vehicle_data['charging_state'] != "Charging":
-                success = self.api.start_charging(vehicle_id)
-                if not success:
-                    return {
-                        "status": "error",
-                        "message": "Failed to start charging"
-                    }
-                logger.info(f"Started charging at price {current_price}¢/kWh")
-            elif not should_be_charging and vehicle_data['charging_state'] == "Charging":
-                success = self.api.stop_charging(vehicle_id)
-                if not success:
-                    return {
-                        "status": "error",
-                        "message": "Failed to stop charging"
-                    }
-                logger.info(f"Stopped charging at price {current_price}¢/kWh")
-            else:
-                logger.info(f"No charging state change needed - Current state: {vehicle_data['charging_state']}, Should charge: {should_be_charging}")
+                    # Update vehicle status in preferences
+                    prefs.update_vehicle_status(vehicle_data)
+
+                    # Determine if we should start or stop charging
+                    should_start = prefs.should_start_charging(current_price)
+                    should_stop = prefs.should_stop_charging(current_price)
+                    current_state = vehicle_data['charging_state']
+
+                    if should_start and current_state != "Charging":
+                        success = self.api.start_charging(prefs.vehicle_id)
+                        if not success:
+                            logger.error(f"Failed to start charging for vehicle {prefs.vehicle_id}")
+                        else:
+                            logger.info(f"Started charging vehicle {prefs.vehicle_id} at price {current_price}¢/kWh")
+
+                    elif should_stop and current_state == "Charging":
+                        success = self.api.stop_charging(prefs.vehicle_id)
+                        if not success:
+                            logger.error(f"Failed to stop charging for vehicle {prefs.vehicle_id}")
+                        else:
+                            logger.info(f"Stopped charging vehicle {prefs.vehicle_id} at price {current_price}¢/kWh")
+
+                    results.append({
+                        "vehicle_id": prefs.vehicle_id,
+                        "battery_level": vehicle_data['battery_level'],
+                        "charging_state": vehicle_data['charging_state'],
+                        "should_charge": should_start,
+                        "should_stop": should_stop
+                    })
+
+                except Exception as e:
+                    logger.error(f"Error processing vehicle {prefs.vehicle_id}: {str(e)}")
+                    continue
 
             return {
                 "status": "success",
                 "message": "Price update processed successfully",
                 "data": {
-                    "should_charge": should_be_charging,
                     "current_price": current_price,
-                    "battery_level": vehicle_data['battery_level'],
-                    "charging_state": vehicle_data['charging_state']
+                    "vehicles_processed": len(results),
+                    "vehicle_states": results
                 }
             }
 

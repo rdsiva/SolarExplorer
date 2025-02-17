@@ -210,3 +210,97 @@ class SavingsInsight(db.Model):
             SavingsInsight.chat_id == str(chat_id),
             SavingsInsight.timestamp >= cutoff_time
         ).order_by(SavingsInsight.timestamp.desc()).all()
+
+
+class TeslaPreferences(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    chat_id = db.Column(db.String(100), db.ForeignKey('user_preferences.chat_id'), nullable=False)
+    enabled = db.Column(db.Boolean, default=False)
+    vehicle_id = db.Column(db.String(100), nullable=True)
+    min_battery_level = db.Column(db.Integer, default=20)
+    max_battery_level = db.Column(db.Integer, default=80)
+    price_threshold = db.Column(db.Float, default=3.5)
+    preferred_start_hour = db.Column(db.Integer, default=22)  # 10 PM
+    preferred_end_hour = db.Column(db.Integer, default=6)    # 6 AM
+    last_vehicle_status = db.Column(db.JSON, nullable=True)  # Stores battery level, charging state, etc.
+    last_status_update = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationship with UserPreferences
+    user = db.relationship('UserPreferences', backref=db.backref('tesla_preferences', uselist=False))
+
+    @staticmethod
+    def get_preferences(chat_id: str) -> Optional["TeslaPreferences"]:
+        """Get Tesla preferences for a specific user"""
+        return TeslaPreferences.query.filter_by(chat_id=str(chat_id)).first()
+
+    @staticmethod
+    def create_or_update(chat_id: str, **kwargs) -> "TeslaPreferences":
+        """Create or update Tesla preferences"""
+        prefs = TeslaPreferences.get_preferences(str(chat_id))
+        if not prefs:
+            prefs = TeslaPreferences(chat_id=str(chat_id))
+            db.session.add(prefs)
+
+        # Update fields if provided
+        for key, value in kwargs.items():
+            if hasattr(prefs, key):
+                setattr(prefs, key, value)
+
+        db.session.commit()
+        return prefs
+
+    def update_vehicle_status(self, status_data: dict) -> None:
+        """Update the vehicle status and timestamp"""
+        self.last_vehicle_status = status_data
+        self.last_status_update = datetime.utcnow()
+        db.session.commit()
+
+    def is_preferred_charging_time(self) -> bool:
+        """Check if current time is within preferred charging hours"""
+        current_hour = datetime.now().hour
+
+        # Handle overnight period (e.g., 22:00-06:00)
+        if self.preferred_start_hour > self.preferred_end_hour:
+            return current_hour >= self.preferred_start_hour or current_hour < self.preferred_end_hour
+        else:
+            return self.preferred_start_hour <= current_hour < self.preferred_end_hour
+
+    def should_start_charging(self, current_price: float) -> bool:
+        """Determine if charging should start based on price and battery level"""
+        if not self.enabled or not self.last_vehicle_status:
+            return False
+
+        battery_level = self.last_vehicle_status.get('battery_level', 0)
+        charging_state = self.last_vehicle_status.get('charging_state', 'Stopped')
+
+        # Emergency charging if battery is below minimum
+        emergency = battery_level <= self.min_battery_level
+
+        # If it's an emergency, charge regardless of time or price
+        if emergency:
+            return True
+
+        # Check if current time is within preferred charging hours
+        if not self.is_preferred_charging_time():
+            return False
+
+        # Check if price is below threshold
+        price_ok = current_price <= self.price_threshold
+
+        # Check if battery is below max level
+        battery_ok = battery_level < self.max_battery_level
+
+        return price_ok and battery_ok
+
+    def should_stop_charging(self, current_price: float) -> bool:
+        """Determine if charging should stop based on price and battery level"""
+        if not self.enabled or not self.last_vehicle_status:
+            return False
+
+        battery_level = self.last_vehicle_status.get('battery_level', 0)
+        charging_state = self.last_vehicle_status.get('charging_state', 'Stopped')
+
+        # Stop if price is above threshold or battery is full
+        return (current_price > self.price_threshold and battery_level > self.min_battery_level) or battery_level >= self.max_battery_level
