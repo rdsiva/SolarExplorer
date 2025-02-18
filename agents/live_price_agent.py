@@ -26,39 +26,25 @@ class LivePriceAgent(BaseAgent):
     async def get_current_price(self) -> Dict[str, Any]:
         """Fetch current price from ComEd API."""
         try:
-            async with aiohttp.ClientSession() as session:
-                # Get data from different endpoints using the same session
-                endpoints = ['currenthouraverage', 'dayahead', '5minutefeed']
-                responses = {}
+            timeout = aiohttp.ClientTimeout(total=10)  # 10 seconds timeout
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                # Get current hour average first
+                current_hour = await self._fetch_endpoint(session, 'currenthouraverage')
 
-                for endpoint in endpoints:
-                    try:
-                        url = f"{self.base_url}?type={endpoint}"
-                        async with session.get(url) as response:
-                            if response.status != 200:
-                                logger.error(f"Error fetching {endpoint} data: {response.status}")
-                                continue
+                # Get day-ahead price
+                day_ahead = await self._fetch_endpoint(session, 'dayahead')
 
-                            if 'application/json' not in response.headers.get('content-type', ''):
-                                logger.error(f"Invalid content type for {endpoint}")
-                                continue
+                # Get 5-minute price
+                five_min = await self._fetch_endpoint(session, '5minutefeed')
 
-                            data = await response.json()
-                            if data and isinstance(data, list) and data[0].get('price'):
-                                responses[endpoint] = float(data[0]['price'])
-                            else:
-                                logger.error(f"Invalid data format from {endpoint}")
-                    except Exception as e:
-                        logger.error(f"Error fetching {endpoint} data: {str(e)}")
-
-                if not responses:
+                if not any([current_hour, day_ahead, five_min]):
                     logger.error("Failed to fetch any price data")
                     return {}
 
                 return {
-                    'current_hour': responses.get('currenthouraverage', 0.0),
-                    'day_ahead': responses.get('dayahead', 0.0),
-                    'five_min': responses.get('5minutefeed', 0.0),
+                    'current_hour': current_hour[0]['price'] if current_hour else 0.0,
+                    'day_ahead': day_ahead[0]['price'] if day_ahead else 0.0,
+                    'five_min': five_min[0]['price'] if five_min else 0.0,
                     'timestamp': datetime.utcnow().isoformat()
                 }
 
@@ -66,16 +52,39 @@ class LivePriceAgent(BaseAgent):
             logger.error(f"Error in get_current_price: {str(e)}")
             return {}
 
+    async def _fetch_endpoint(self, session: aiohttp.ClientSession, endpoint: str) -> Optional[list]:
+        """Helper method to fetch data from a specific endpoint."""
+        try:
+            url = f"{self.base_url}?type={endpoint}"
+            async with session.get(url) as response:
+                if response.status != 200:
+                    logger.error(f"Error fetching {endpoint} data: {response.status}")
+                    return None
+
+                if 'application/json' not in response.headers.get('content-type', ''):
+                    logger.error(f"Invalid content type for {endpoint}")
+                    return None
+
+                data = await response.json()
+                if not isinstance(data, list) or not data:
+                    logger.error(f"Invalid data format from {endpoint}")
+                    return None
+
+                return data
+        except Exception as e:
+            logger.error(f"Error fetching {endpoint} data: {str(e)}")
+            return None
+
     def format_alert_message(self, price_data: Dict[str, Any]) -> str:
-        """Format price data into a Telegram message."""
+        """Format price data into a readable message."""
         if not price_data:
             return "⚠️ Error fetching price data"
 
         return (
             f"🔔 ComEd Energy Price Update\n\n"
-            f"⚡ Current Hour Average: {price_data['current_hour']:.2f}¢/kWh\n"
-            f"📊 Day Ahead Price: {price_data['day_ahead']:.2f}¢/kWh\n"
-            f"⏱️ Latest 5-min Price: {price_data['five_min']:.2f}¢/kWh\n"
+            f"⚡ Current Hour Average: {float(price_data['current_hour']):.2f}¢/kWh\n"
+            f"📊 Day Ahead Price: {float(price_data['day_ahead']):.2f}¢/kWh\n"
+            f"⏱️ Latest 5-min Price: {float(price_data['five_min']):.2f}¢/kWh\n"
             f"🕒 Time: {datetime.fromisoformat(price_data['timestamp']).strftime('%Y-%m-%d %H:%M:%S')} UTC"
         )
 
@@ -87,16 +96,17 @@ class LivePriceAgent(BaseAgent):
                 if price_data:
                     alert_message = self.format_alert_message(price_data)
 
-                    # Send price update to all interested agents
+                    # Send price update to interested agents
+                    current_price = float(price_data['current_hour'])
                     price_message = {
                         'data': price_data,
                         'formatted_message': alert_message,
-                        'threshold_exceeded': price_data['current_hour'] > self.price_threshold
+                        'threshold_exceeded': current_price > self.price_threshold
                     }
 
                     # If threshold exceeded, send with high priority
                     priority = (MessagePriority.HIGH 
-                              if price_data['current_hour'] > self.price_threshold 
+                              if current_price > self.price_threshold 
                               else MessagePriority.NORMAL)
 
                     return Message(
@@ -104,8 +114,7 @@ class LivePriceAgent(BaseAgent):
                         source=self.name,
                         target=message.source,
                         payload=price_message,
-                        priority=priority,
-                        correlation_id=message.correlation_id
+                        priority=priority
                     )
 
             elif message.type == MessageType.PREFERENCE_UPDATE:
@@ -119,8 +128,7 @@ class LivePriceAgent(BaseAgent):
                     msg_type=MessageType.RESPONSE,
                     source=self.name,
                     target=message.source,
-                    payload={'status': 'preferences_updated'},
-                    correlation_id=message.correlation_id
+                    payload={'status': 'preferences_updated'}
                 )
 
         except Exception as e:
@@ -129,9 +137,10 @@ class LivePriceAgent(BaseAgent):
                 msg_type=MessageType.ERROR,
                 source=self.name,
                 target=message.source,
-                payload={'error': str(e)},
-                correlation_id=message.correlation_id
+                payload={'error': str(e)}
             )
+
+        return None
 
     async def start(self):
         """Start the price monitoring loop."""
