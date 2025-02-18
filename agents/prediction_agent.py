@@ -4,7 +4,6 @@ from datetime import datetime, timedelta
 import numpy as np
 from .base_agent import BaseAgent
 from models import PriceHistory
-from app import app
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +17,8 @@ class PricePredictionAgent(BaseAgent):
         if message.get("command") == "predict_prices":
             try:
                 # Get historical data from database using Flask application context
+                from app import app  # Import here to avoid circular dependency
+
                 with app.app_context():
                     historical_records = PriceHistory.get_recent_history(hours=24, provider=self.provider)
                     feedback_records = PriceHistory.get_recent_predictions_with_accuracy(provider=self.provider)

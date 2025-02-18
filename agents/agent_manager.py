@@ -7,6 +7,8 @@ from .live_price_agent import LivePriceAgent
 from .notification_agent import NotificationAgent
 from .analysis_agent import AnalysisAgent
 from .data_collection_agent import DataCollectionAgent
+from .coordinator_agent import CoordinatorAgent
+from .prediction_agent import PricePredictionAgent
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +35,9 @@ class AgentManager:
                 LivePriceAgent(config={'price_threshold': 3.0, 'check_interval': 300}),
                 NotificationAgent(),
                 AnalysisAgent(),
-                DataCollectionAgent()
+                DataCollectionAgent(),
+                CoordinatorAgent(),
+                PricePredictionAgent()
             ]
             logger.info(f"Initialized {len(self._agents)} agents")
         except Exception as e:

@@ -4,25 +4,24 @@ from .base_agent import BaseAgent
 from .data_collection_agent import DataCollectionAgent
 from .analysis_agent import AnalysisAgent
 from .notification_agent import NotificationAgent
-from .prediction_agent import PricePredictionAgent
-from .tesla_charging_agent import TeslaChargingAgent
 
 logger = logging.getLogger(__name__)
 
 class CoordinatorAgent(BaseAgent):
     def __init__(self):
         super().__init__("Coordinator")
+        # Import PricePredictionAgent here to avoid circular dependency
+        from .prediction_agent import PricePredictionAgent
+
         self.data_collector = DataCollectionAgent()
         self.analyzer = AnalysisAgent()
         self.predictor = PricePredictionAgent()
         self.notifier = NotificationAgent()
-        self.tesla_charging = TeslaChargingAgent()
         self.agents = [
             self.data_collector, 
             self.analyzer, 
             self.predictor, 
-            self.notifier,
-            self.tesla_charging
+            self.notifier
         ]
 
     async def start_all(self):
@@ -63,20 +62,7 @@ class CoordinatorAgent(BaseAgent):
 
                 prediction_data = prediction_result.get("predictions", {}) if prediction_result.get("status") == "success" else {}
 
-                # 4. Control Tesla charging based on price data
-                charging_result = await self.tesla_charging.process({
-                    "command": "process_price_update",
-                    "price_data": {
-                        "hourly_data": {
-                            "price": analysis_data.get("current_price", 0),
-                            "time": price_data.get("data", {}).get("hourly_data", {}).get("time", "")
-                        }
-                    }
-                })
-                if charging_result.get("status") != "success":
-                    logger.warning(f"Tesla charging control failed: {charging_result.get('message')}")
-
-                # 5. Send notifications if needed
+                # 4. Send notifications if needed
                 if self.should_send_notification(analysis_data, prediction_data):
                     notification_result = await self.notifier.process({
                         "command": "send_notification",
